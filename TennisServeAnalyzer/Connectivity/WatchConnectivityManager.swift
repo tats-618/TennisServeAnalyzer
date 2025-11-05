@@ -3,6 +3,7 @@
 //  TennisServeAnalyzer (iOS)
 //
 //  Receives IMU data from Apple Watch
+//  Updated: Optimized for 200Hz data reception
 //
 
 import Foundation
@@ -36,6 +37,7 @@ class WatchConnectivityManager: NSObject, ObservableObject {
     @Published var isWatchReachable: Bool = false
     @Published var lastReceivedTimestamp: Date?
     @Published var receivedSamplesCount: Int = 0
+    @Published var effectiveReceiveRate: Double = 0.0  // ✅ 追加：受信Hz表示
     
     // Callbacks
     var onIMUDataReceived: ((ServeSample) -> Void)?
@@ -43,6 +45,18 @@ class WatchConnectivityManager: NSObject, ObservableObject {
     var onAnalysisResultReceived: ((ServeAnalysis) -> Void)?
     
     private var session: WCSession?
+    
+    // ✅ 追加：並行処理用キュー（200Hz対応）
+    private let processingQueue = DispatchQueue(
+        label: "com.tennisanalyzer.imuprocessing",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+    
+    // ✅ 追加：受信レート計測
+    private var lastReceiveTime: TimeInterval = 0
+    private var receiveIntervals: [TimeInterval] = []
+    private var rateCheckTimer: Timer?
     
     // MARK: - Initialization
     private override init() {
@@ -54,10 +68,38 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             session.activate()
             self.session = session
             
-            print("📱 iOS WatchConnectivityManager initialized")
+            print("📱 iOS WatchConnectivityManager initialized (200Hz optimized)")
+            
+            // 受信レート監視を開始
+            startRateMonitoring()
         } else {
             print("⚠️ WatchConnectivity not supported on this device")
         }
+    }
+    
+    // MARK: - Rate Monitoring
+    private func startRateMonitoring() {
+        rateCheckTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.updateEffectiveReceiveRate()
+        }
+    }
+    
+    private func updateEffectiveReceiveRate() {
+        guard !receiveIntervals.isEmpty else {
+            DispatchQueue.main.async { [weak self] in
+                self?.effectiveReceiveRate = 0.0
+            }
+            return
+        }
+        
+        let avgInterval = receiveIntervals.reduce(0, +) / Double(receiveIntervals.count)
+        let effectiveHz = avgInterval > 0 ? 1.0 / avgInterval : 0
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.effectiveReceiveRate = effectiveHz
+        }
+        
+        print("📊 iPhone receive rate: \(String(format: "%.1f", effectiveHz)) samples/sec")
     }
     
     // MARK: - Send Commands to Watch
@@ -152,31 +194,58 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             gyroscope: (gyroX, gyroY, gyroZ)
         )
         
+        // レート計測
+        trackReceiveRate()
+        
         DispatchQueue.main.async { [weak self] in
             self?.lastReceivedTimestamp = Date()
             self?.receivedSamplesCount += 1
             self?.onIMUDataReceived?(sample)
         }
         
-        if receivedSamplesCount % 50 == 0 {
+        if receivedSamplesCount % 100 == 0 {
             print("📊 Received \(receivedSamplesCount) IMU samples from Watch")
         }
     }
     
     private func processBatchData(_ data: Data, metadata: [String: Any]) {
-        do {
-            let decoder = JSONDecoder()
-            let samples = try decoder.decode([ServeSample].self, from: data)
+        // ✅ 並行処理でデコード（200Hz対応）
+        processingQueue.async { [weak self] in
+            guard let self = self else { return }
             
-            print("📦 Received batch: \(samples.count) samples")
-            
-            DispatchQueue.main.async { [weak self] in
-                self?.receivedSamplesCount += samples.count
-                self?.onBatchDataReceived?(samples)
+            do {
+                let decoder = JSONDecoder()
+                let samples = try decoder.decode([ServeSample].self, from: data)
+                
+                print("📦 Received batch: \(samples.count) samples")
+                
+                // レート計測（バッチの最初のサンプルで）
+                self.trackReceiveRate()
+                
+                DispatchQueue.main.async {
+                    self.receivedSamplesCount += samples.count
+                    self.onBatchDataReceived?(samples)
+                }
+            } catch {
+                print("❌ Failed to decode batch data: \(error)")
             }
-        } catch {
-            print("❌ Failed to decode batch data: \(error)")
         }
+    }
+    
+    private func trackReceiveRate() {
+        let currentTime = Date().timeIntervalSinceReferenceDate
+        
+        if lastReceiveTime > 0 {
+            let interval = currentTime - lastReceiveTime
+            receiveIntervals.append(interval)
+            
+            // 最新100サンプルのみ保持
+            if receiveIntervals.count > 100 {
+                receiveIntervals.removeFirst()
+            }
+        }
+        
+        lastReceiveTime = currentTime
     }
     
     private func processAnalysisResult(_ message: [String: Any]) {
@@ -209,6 +278,12 @@ class WatchConnectivityManager: NSObject, ObservableObject {
         print("🔄 Resetting WatchConnectivityManager")
         receivedSamplesCount = 0
         lastReceivedTimestamp = nil
+        receiveIntervals.removeAll()
+        effectiveReceiveRate = 0.0
+    }
+    
+    deinit {
+        rateCheckTimer?.invalidate()
     }
 }
 
@@ -221,6 +296,7 @@ extension WatchConnectivityManager: WCSessionDelegate {
                 self?.isWatchConnected = false
             } else {
                 print("✅ WCSession activated on iOS")
+                print("   - Activation state: \(activationState.rawValue)")
                 self?.isWatchConnected = (activationState == .activated)
                 
                 if session.isPaired {
@@ -229,6 +305,9 @@ extension WatchConnectivityManager: WCSessionDelegate {
                 if session.isWatchAppInstalled {
                     print("✅ Watch app is installed")
                 }
+                
+                // タイムシンクを送信
+                self?.sendTimeSync()
             }
         }
     }

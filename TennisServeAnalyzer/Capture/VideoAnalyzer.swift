@@ -37,6 +37,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
     private var videoCaptureManager: VideoCaptureManager?
     private var poseDetector: PoseDetector?
     private var eventDetector: EventDetector?
+    private var ballTracker: BallTracker?
     
     // Session data
     private var frameCount: Int = 0
@@ -119,6 +120,15 @@ class VideoAnalyzer: NSObject, ObservableObject {
             print("✅ EventDetector initialized")
         }
         return eventDetector
+    }
+    
+    private func getOrCreateBallTracker() -> BallTracker? {
+            if ballTracker == nil {
+                print("🎾 Initializing BallTracker (YOLO)...")
+                ballTracker = BallTracker()
+                print("✅ BallTracker initialized")
+            }
+            return ballTracker
     }
     
     // MARK: - Main Flow
@@ -215,69 +225,110 @@ class VideoAnalyzer: NSObject, ObservableObject {
     
     // MARK: - Frame Processing
     private func processFrame(sampleBuffer: CMSampleBuffer, timestamp: Double) {
-        guard case .recording = state else { return }
-        
-        frameCount += 1
-        
-        // Pose detection (every N frames)
-        if frameCount % poseDetectionInterval == 0 {
-            if let detector = getOrCreatePoseDetector() {
-                if let pose = detector.detectPose(from: sampleBuffer, timestamp: timestamp) {
-                    DispatchQueue.main.async { [weak self] in
-                        self?.detectedPose = pose
-                    }
-                    
-                    // Store if valid
-                    if pose.isValid {
-                        poseHistory.append(pose)
+            guard case .recording = state else { return }
+            
+            frameCount += 1
+            
+            // Pose detection (every N frames)
+            if frameCount % poseDetectionInterval == 0 {
+                if let detector = getOrCreatePoseDetector() {
+                    if let pose = detector.detectPose(from: sampleBuffer, timestamp: timestamp) {
+                        DispatchQueue.main.async { [weak self] in
+                            self?.detectedPose = pose
+                        }
                         
-                        // Check for trophy pose
-                        if trophyPoseEvent == nil {
-                            if let eventDet = getOrCreateEventDetector(),
-                               let trophy = eventDet.detectTrophyPose(pose: pose, ballApex: nil) {
-                                trophyPoseEvent = trophy
-                                print("✅ Trophy pose detected at t=\(String(format: "%.3f", trophy.timestamp))s")
-                                
-                                // Update UI flag
+                        // Store if valid
+                        if pose.isValid {
+                            poseHistory.append(pose)
+                            
+                            // Check for trophy pose
+                            if trophyPoseEvent == nil {
+                                if let eventDet = getOrCreateEventDetector(),
+                                   let trophy = eventDet.detectTrophyPose(pose: pose, ballApex: nil) {
+                                    trophyPoseEvent = trophy
+                                    print("✅ Trophy pose detected at t=\(String(format: "%.3f", trophy.timestamp))s")
+                                    
+                                    // Update UI flag
+                                    DispatchQueue.main.async { [weak self] in
+                                        self?.trophyPoseDetected = true
+                                    }
+                                }
+                            } else {
+                                // Keep flag active while in trophy pose range
                                 DispatchQueue.main.async { [weak self] in
                                     self?.trophyPoseDetected = true
                                 }
                             }
-                        } else {
-                            // Keep flag active while in trophy pose range
-                            DispatchQueue.main.async { [weak self] in
-                                self?.trophyPoseDetected = true
+                        }
+                    }
+                }
+            }
+            
+            // Ball detection (every frame for YOLO)
+            if let tracker = getOrCreateBallTracker() {
+                if let ball = tracker.trackBall(from: sampleBuffer, timestamp: timestamp) {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.detectedBall = ball
+                    }
+                    
+                    // Check for toss apex
+                    if let apex = tracker.detectTossApex() {
+                        print("🎾 Toss apex detected at \(String(format: "%.3f", apex.timestamp))s")
+                        
+                        // Update trophy pose with apex info if available
+                        if trophyPoseEvent == nil, let eventDet = getOrCreateEventDetector() {
+                            // Try to find pose near apex
+                            let nearbyPoses = poseHistory.filter { pose in
+                                abs(pose.timestamp - apex.timestamp) < 0.1
+                            }
+                            
+                            if let nearestPose = nearbyPoses.min(by: { abs($0.timestamp - apex.timestamp) < abs($1.timestamp - apex.timestamp) }) {
+                                if let trophy = eventDet.detectTrophyPose(
+                                    pose: nearestPose,
+                                    ballApex: (time: apex.timestamp, height: apex.height)
+                                ) {
+                                    trophyPoseEvent = trophy
+                                    print("✅ Trophy pose detected with apex at t=\(String(format: "%.3f", trophy.timestamp))s")
+                                    
+                                    DispatchQueue.main.async { [weak self] in
+                                        self?.trophyPoseDetected = true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Log every second
+            if frameCount % 120 == 0 {
+                print("📸 Frame: \(frameCount), Poses: \(poseHistory.count)")
+                
+                // Log ball tracker performance
+                if let tracker = ballTracker {
+                    let perf = tracker.getPerformanceInfo()
+                    print("🎾 Ball detection: \(String(format: "%.1f", perf.fps)) fps (avg: \(String(format: "%.1f", perf.avgMs))ms)")
+                }
+            }
+            
+            // Check for impact from Watch IMU
+            if watchIMUHistory.count >= 50 {
+                if impactEvent == nil {
+                    if let eventDet = getOrCreateEventDetector() {
+                        let recentIMU = Array(watchIMUHistory.suffix(50))
+                        if let impact = eventDet.detectImpact(in: recentIMU) {
+                            impactEvent = impact
+                            print("✅ Impact detected at t=\(String(format: "%.3f", impact.timestamp))s")
+                            
+                            // Stop recording after impact
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                                self?.stopRecording()
                             }
                         }
                     }
                 }
             }
         }
-        
-        // Log every second
-        if frameCount % 120 == 0 {
-            print("📸 Frame: \(frameCount), Poses: \(poseHistory.count)")
-        }
-        
-        // Check for impact from Watch IMU
-        if watchIMUHistory.count >= 50 {
-            if impactEvent == nil {
-                if let eventDet = getOrCreateEventDetector() {
-                    let recentIMU = Array(watchIMUHistory.suffix(50))
-                    if let impact = eventDet.detectImpact(in: recentIMU) {
-                        impactEvent = impact
-                        print("✅ Impact detected at t=\(String(format: "%.3f", impact.timestamp))s")
-                        
-                        // Stop recording after impact
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                            self?.stopRecording()
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
     // MARK: - Analysis
     private func performAnalysis() {
         print("🔍 Performing analysis...")
@@ -414,6 +465,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
         detectedPose = nil
         detectedBall = nil
         trophyPoseDetected = false
+        ballTracker = nil
     }
     
     func getPreviewLayer() -> AVCaptureVideoPreviewLayer? {

@@ -29,6 +29,17 @@ struct ContentView: View {
                 .edgesIgnoringSafeArea(.all)
             }
             
+            // ボール検出オーバーレイ（録画中のみ）
+            if case .recording = videoAnalyzer.state {
+                GeometryReader { geometry in
+                    BallOverlayView(
+                        ball: videoAnalyzer.detectedBall,
+                        viewSize: geometry.size
+                    )
+                }
+                .edgesIgnoringSafeArea(.all)
+            }
+            
             // オーバーレイUI
             VStack {
                 // トップバー
