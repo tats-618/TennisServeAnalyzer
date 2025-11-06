@@ -2,15 +2,7 @@
 //  BallOverlayView.swift
 //  TennisServeAnalyzer
 //
-//  Created by 島本健生 on 2025/11/06.
-//
-
-
-//
-//  BallOverlayView.swift
-//  TennisServeAnalyzer
-//
-//  Real-time ball detection visualization overlay
+//  Real-time ball detection visualization with CORRECT coordinate scaling
 //
 
 import SwiftUI
@@ -41,8 +33,13 @@ struct BallOverlayView: View {
     
     // MARK: - Ball Circle
     private func ballCircle(ball: BallDetection, in size: CGSize) -> some View {
-        let scaledPosition = scalePoint(ball.position, from: CGSize(width: 1080, height: 1920), to: size)
-        let scaledRadius = ball.radius * (size.width / 1080)
+        // 🔧 Use actual image size from detection
+        let scaledPosition = scalePoint(
+            ball.position,
+            from: ball.imageSize,  // Use actual camera resolution
+            to: size
+        )
+        let scaledRadius = ball.radius * (size.width / ball.imageSize.width)
         
         return ZStack {
             // Outer glow
@@ -70,8 +67,12 @@ struct BallOverlayView: View {
     
     // MARK: - Confidence Indicator
     private func confidenceIndicator(ball: BallDetection, in size: CGSize) -> some View {
-        let scaledPosition = scalePoint(ball.position, from: CGSize(width: 1080, height: 1920), to: size)
-        let scaledRadius = ball.radius * (size.width / 1080)
+        let scaledPosition = scalePoint(
+            ball.position,
+            from: ball.imageSize,
+            to: size
+        )
+        let scaledRadius = ball.radius * (size.width / ball.imageSize.width)
         
         return VStack(spacing: 2) {
             Text("🎾")
@@ -104,7 +105,7 @@ struct BallOverlayView: View {
         }
     }
     
-    // MARK: - Coordinate Transformation
+    // MARK: - Coordinate Transformation (FIXED)
     private func scalePoint(_ point: CGPoint, from sourceSize: CGSize, to targetSize: CGSize) -> CGPoint {
         let scaleX = targetSize.width / sourceSize.width
         let scaleY = targetSize.height / sourceSize.height
@@ -120,10 +121,11 @@ struct BallOverlayView: View {
 #Preview {
     BallOverlayView(
         ball: BallDetection(
-            position: CGPoint(x: 540, y: 400),
+            position: CGPoint(x: 640, y: 360),
             radius: 25,
             confidence: 0.85,
-            timestamp: 0
+            timestamp: 0,
+            imageSize: CGSize(width: 1280, height: 720)
         ),
         viewSize: CGSize(width: 375, height: 812)
     )

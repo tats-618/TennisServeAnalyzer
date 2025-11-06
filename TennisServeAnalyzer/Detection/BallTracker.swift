@@ -2,7 +2,7 @@
 //  BallTracker.swift
 //  TennisServeAnalyzer
 //
-//  IMPROVED: YOLO-based ball detection with velocity-based apex detection
+//  IMPROVED: YOLO-based ball detection with IMAGE SIZE tracking
 //
 
 import CoreImage
@@ -12,17 +12,16 @@ import Accelerate
 
 // MARK: - Ball Detection Result
 struct BallDetection {
-    let position: CGPoint  // Screen coordinates
+    let position: CGPoint  // Coordinates in SOURCE image space
     let radius: CGFloat
     let confidence: Float  // 0.0 - 1.0
     let timestamp: Double
+    let imageSize: CGSize  // 🔧 NEW: Actual image size for correct scaling
     
     var isValid: Bool {
         return confidence > 0.4 && radius > 5.0 && radius < 100.0
     }
 }
-
-// NOTE: BallApex is defined in ServeDataModel.swift (shared)
 
 // MARK: - Kalman Filter State
 private struct KalmanState {
@@ -121,11 +120,15 @@ class BallTracker {
         let predictedX = state.x + state.vx * dt
         let predictedY = state.y + state.vy * dt
         
+        // 🔧 Use last known image size
+        let lastImageSize = detectionHistory.last?.imageSize ?? CGSize(width: 1280, height: 720)
+        
         return BallDetection(
             position: CGPoint(x: predictedX, y: predictedY),
             radius: 20.0,
             confidence: 0.3,
-            timestamp: timestamp
+            timestamp: timestamp,
+            imageSize: lastImageSize
         )
     }
     
@@ -139,8 +142,6 @@ class BallTracker {
     }
     
     // MARK: - Apex Detection (Velocity-based)
-    /// Detects ball apex using velocity-based method
-    /// According to research: y(t) velocity = 0, with negative acceleration
     func detectTossApex() -> BallApex? {
         guard detectionHistory.count >= 10 else { return nil }
         
@@ -175,24 +176,20 @@ class BallTracker {
             let next = velocities[i + 1]
             
             // Check for zero-crossing
-            // Moving up: vy < 0 (negative)
-            // Moving down: vy > 0 (positive)
-            let isMovingUp = prev.vy < -20.0  // Moving up with sufficient speed
-            let isCrossingZero = abs(curr.vy) < 30.0  // Near zero
-            let isMovingDown = next.vy > 20.0  // Started moving down
+            let isMovingUp = prev.vy < -20.0
+            let isCrossingZero = abs(curr.vy) < 30.0
+            let isMovingDown = next.vy > 20.0
             
             if isMovingUp && isCrossingZero && isMovingDown {
-                // Calculate acceleration (should be positive/downward)
+                // Calculate acceleration
                 let accel = (next.vy - prev.vy) / (next.timestamp - prev.timestamp)
                 
-                // Acceleration should be positive (downward) near apex
                 guard accel > 50.0 else { continue }
                 
                 let apexDetection = detectionHistory[curr.index]
                 
-                // Validate height (should be in upper portion of frame)
-                // Assuming typical frame size, apex should be in top 40%
-                let imageHeight: CGFloat = 1920  // Typical height
+                // Validate height
+                let imageHeight = apexDetection.imageSize.height
                 let heightRatio = apexDetection.position.y / imageHeight
                 
                 guard heightRatio < 0.4 else { continue }
@@ -201,9 +198,7 @@ class BallTracker {
                 print("   - Time: \(String(format: "%.3f", apexDetection.timestamp))s")
                 print("   - Position: (\(Int(apexDetection.position.x)), \(Int(apexDetection.position.y)))")
                 print("   - Velocity: \(String(format: "%.1f", curr.vy)) px/s")
-                print("   - Acceleration: \(String(format: "%.1f", accel)) px/s²")
                 
-                // Update cooldown
                 lastApexTime = apexDetection.timestamp
                 
                 return BallApex(
