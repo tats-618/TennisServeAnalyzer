@@ -2,7 +2,7 @@
 //  VideoAnalyzer.swift
 //  TennisServeAnalyzer
 //
-//  With Pose Detection - Correct Data Structure
+//  Video analysis with Pose Detection + IMU Integration
 //
 
 import Foundation
@@ -19,9 +19,9 @@ enum AnalysisState {
     case error(String)
 }
 
-// MARK: - Video Analyzer (With Pose Detection)
+// MARK: - Video Analyzer (ObservableObject for SwiftUI)
 class VideoAnalyzer: NSObject, ObservableObject {
-    // MARK: Properties
+    // MARK: Published Properties
     @Published var state: AnalysisState = .idle
     @Published var currentFPS: Double = 0.0
     @Published var detectedPose: PoseData? = nil
@@ -51,7 +51,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
     
     // Configuration
     private let maxSessionDuration: TimeInterval = 10.0
-    private let poseDetectionInterval: Int = 8  // Every 8 frames (15fps detection at 120fps) - Optimized for performance
+    private let poseDetectionInterval: Int = 8  // Every 8 frames (15fps detection at 120fps)
     
     // MARK: - Initialization
     override init() {
@@ -91,7 +91,6 @@ class VideoAnalyzer: NSObject, ObservableObject {
     
     // MARK: - Watch Data Handlers
     private func handleWatchIMUSample(_ sample: ServeSample) {
-        // Add to IMU history
         addIMUSample(sample)
     }
     
@@ -101,6 +100,9 @@ class VideoAnalyzer: NSObject, ObservableObject {
         for sample in samples {
             addIMUSample(sample)
         }
+        
+        // 🔧 NEW: Try to detect impact after receiving batch
+        detectImpactFromIMU()
     }
     
     // MARK: - Lazy Initialization
@@ -123,12 +125,12 @@ class VideoAnalyzer: NSObject, ObservableObject {
     }
     
     private func getOrCreateBallTracker() -> BallTracker? {
-            if ballTracker == nil {
-                print("🎾 Initializing BallTracker (YOLO)...")
-                ballTracker = BallTracker()
-                print("✅ BallTracker initialized")
-            }
-            return ballTracker
+        if ballTracker == nil {
+            print("🎾 Initializing BallTracker (YOLO)...")
+            ballTracker = BallTracker()
+            print("✅ BallTracker initialized")
+        }
+        return ballTracker
     }
     
     // MARK: - Main Flow
@@ -217,7 +219,8 @@ class VideoAnalyzer: NSObject, ObservableObject {
         print("🔍 Setting state to analyzing")
         state = .analyzing
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+        // 🔧 短縮: 1.0s → 0.2s
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             print("📊 Performing analysis")
             self?.performAnalysis()
         }
@@ -225,36 +228,68 @@ class VideoAnalyzer: NSObject, ObservableObject {
     
     // MARK: - Frame Processing
     private func processFrame(sampleBuffer: CMSampleBuffer, timestamp: Double) {
-            guard case .recording = state else { return }
-            
-            frameCount += 1
-            
-            // Pose detection (every N frames)
-            if frameCount % poseDetectionInterval == 0 {
-                if let detector = getOrCreatePoseDetector() {
-                    if let pose = detector.detectPose(from: sampleBuffer, timestamp: timestamp) {
-                        DispatchQueue.main.async { [weak self] in
-                            self?.detectedPose = pose
+        guard case .recording = state else { return }
+        
+        frameCount += 1
+        
+        // Pose detection (every N frames)
+        if frameCount % poseDetectionInterval == 0 {
+            if let detector = getOrCreatePoseDetector() {
+                if let pose = detector.detectPose(from: sampleBuffer, timestamp: timestamp) {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.detectedPose = pose
+                    }
+                    
+                    // Store if valid
+                    if pose.isValid {
+                        poseHistory.append(pose)
+                        
+                        // Check for trophy pose
+                        if trophyPoseEvent == nil {
+                            if let eventDet = getOrCreateEventDetector(),
+                               let trophy = eventDet.detectTrophyPose(pose: pose, ballApex: nil) {
+                                trophyPoseEvent = trophy
+                                print("✅ Trophy pose detected at t=\(String(format: "%.3f", trophy.timestamp))s")
+                                
+                                DispatchQueue.main.async { [weak self] in
+                                    self?.trophyPoseDetected = true
+                                }
+                            }
+                        } else {
+                            DispatchQueue.main.async { [weak self] in
+                                self?.trophyPoseDetected = true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Ball detection
+        if let tracker = getOrCreateBallTracker() {
+            if let ball = tracker.trackBall(from: sampleBuffer, timestamp: timestamp) {
+                DispatchQueue.main.async { [weak self] in
+                    self?.detectedBall = ball
+                }
+                
+                // Check for toss apex
+                if let apex = tracker.detectTossApex() {
+                    print("🎾 Toss apex detected at \(String(format: "%.3f", apex.timestamp))s")
+                    
+                    // Update trophy pose with apex info
+                    if trophyPoseEvent == nil, let eventDet = getOrCreateEventDetector() {
+                        let nearbyPoses = poseHistory.filter { pose in
+                            abs(pose.timestamp - apex.timestamp) < 0.1
                         }
                         
-                        // Store if valid
-                        if pose.isValid {
-                            poseHistory.append(pose)
-                            
-                            // Check for trophy pose
-                            if trophyPoseEvent == nil {
-                                if let eventDet = getOrCreateEventDetector(),
-                                   let trophy = eventDet.detectTrophyPose(pose: pose, ballApex: nil) {
-                                    trophyPoseEvent = trophy
-                                    print("✅ Trophy pose detected at t=\(String(format: "%.3f", trophy.timestamp))s")
-                                    
-                                    // Update UI flag
-                                    DispatchQueue.main.async { [weak self] in
-                                        self?.trophyPoseDetected = true
-                                    }
-                                }
-                            } else {
-                                // Keep flag active while in trophy pose range
+                        if let nearestPose = nearbyPoses.min(by: { abs($0.timestamp - apex.timestamp) < abs($1.timestamp - apex.timestamp) }) {
+                            if let trophy = eventDet.detectTrophyPose(
+                                pose: nearestPose,
+                                ballApex: (time: apex.timestamp, height: apex.height)
+                            ) {
+                                trophyPoseEvent = trophy
+                                print("✅ Trophy pose detected with apex at t=\(String(format: "%.3f", trophy.timestamp))s")
+                                
                                 DispatchQueue.main.async { [weak self] in
                                     self?.trophyPoseDetected = true
                                 }
@@ -263,72 +298,46 @@ class VideoAnalyzer: NSObject, ObservableObject {
                     }
                 }
             }
+        }
+        
+        // Log every second
+        if frameCount % 120 == 0 {
+            print("📸 Frame: \(frameCount), Poses: \(poseHistory.count)")
             
-            // Ball detection (every frame for YOLO)
-            if let tracker = getOrCreateBallTracker() {
-                if let ball = tracker.trackBall(from: sampleBuffer, timestamp: timestamp) {
-                    DispatchQueue.main.async { [weak self] in
-                        self?.detectedBall = ball
-                    }
-                    
-                    // Check for toss apex
-                    if let apex = tracker.detectTossApex() {
-                        print("🎾 Toss apex detected at \(String(format: "%.3f", apex.timestamp))s")
-                        
-                        // Update trophy pose with apex info if available
-                        if trophyPoseEvent == nil, let eventDet = getOrCreateEventDetector() {
-                            // Try to find pose near apex
-                            let nearbyPoses = poseHistory.filter { pose in
-                                abs(pose.timestamp - apex.timestamp) < 0.1
-                            }
-                            
-                            if let nearestPose = nearbyPoses.min(by: { abs($0.timestamp - apex.timestamp) < abs($1.timestamp - apex.timestamp) }) {
-                                if let trophy = eventDet.detectTrophyPose(
-                                    pose: nearestPose,
-                                    ballApex: (time: apex.timestamp, height: apex.height)
-                                ) {
-                                    trophyPoseEvent = trophy
-                                    print("✅ Trophy pose detected with apex at t=\(String(format: "%.3f", trophy.timestamp))s")
-                                    
-                                    DispatchQueue.main.async { [weak self] in
-                                        self?.trophyPoseDetected = true
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            if let tracker = ballTracker {
+                let perf = tracker.getPerformanceInfo()
+                print("🎾 Ball detection: \(String(format: "%.1f", perf.fps)) fps (avg: \(String(format: "%.1f", perf.avgMs))ms)")
             }
+        }
+        
+        // 🔧 NEW: Check for impact periodically
+        detectImpactFromIMU()
+    }
+    
+    // MARK: - 🔧 NEW: Impact Detection from IMU
+    private func detectImpactFromIMU() {
+        guard impactEvent == nil else { return }
+        guard watchIMUHistory.count >= 50 else { return }
+        
+        if let eventDet = getOrCreateEventDetector() {
+            let recentIMU = Array(watchIMUHistory.suffix(100))
             
-            // Log every second
-            if frameCount % 120 == 0 {
-                print("📸 Frame: \(frameCount), Poses: \(poseHistory.count)")
+            if let impact = eventDet.detectImpact(in: recentIMU) {
+                impactEvent = impact
+                print("💥 Impact detected!")
+                print("   - Time: \(String(format: "%.3f", impact.timestamp))s")
+                print("   - Peak ω: \(String(format: "%.1f", impact.peakAngularVelocity)) rad/s")
+                print("   - Peak jerk: \(String(format: "%.1f", impact.peakJerk)) m/s³")
+                print("   - Confidence: \(Int(impact.confidence * 100))%")
                 
-                // Log ball tracker performance
-                if let tracker = ballTracker {
-                    let perf = tracker.getPerformanceInfo()
-                    print("🎾 Ball detection: \(String(format: "%.1f", perf.fps)) fps (avg: \(String(format: "%.1f", perf.avgMs))ms)")
-                }
-            }
-            
-            // Check for impact from Watch IMU
-            if watchIMUHistory.count >= 50 {
-                if impactEvent == nil {
-                    if let eventDet = getOrCreateEventDetector() {
-                        let recentIMU = Array(watchIMUHistory.suffix(50))
-                        if let impact = eventDet.detectImpact(in: recentIMU) {
-                            impactEvent = impact
-                            print("✅ Impact detected at t=\(String(format: "%.3f", impact.timestamp))s")
-                            
-                            // Stop recording after impact
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                                self?.stopRecording()
-                            }
-                        }
-                    }
+                // Stop recording shortly after impact
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.stopRecording()
                 }
             }
         }
+    }
+    
     // MARK: - Analysis
     private func performAnalysis() {
         print("🔍 Performing analysis...")
@@ -347,12 +356,21 @@ class VideoAnalyzer: NSObject, ObservableObject {
             return
         }
         
-        // Calculate metrics
+        // 🔧 NEW: Calculate metrics using MetricsCalculator if we have all data
         let metrics: ServeMetrics
         
         if let trophy = trophyPoseEvent, let impact = impactEvent {
-            print("✅ Calculating real metrics")
-            metrics = calculateRealMetrics(trophy: trophy, impact: impact, avgFPS: avgFPS)
+            print("✅ Calculating full metrics with MetricsCalculator")
+            
+            let tossHistory = ballTracker?.getDetectionHistory() ?? []
+            
+            metrics = MetricsCalculator.calculateMetrics(
+                trophyPose: trophy,
+                impactEvent: impact,
+                tossHistory: tossHistory,
+                imuHistory: watchIMUHistory,
+                calibration: nil  // TODO: キャリブレーション実装後に追加
+            )
         } else {
             print("⚠️ Using partial metrics (missing events)")
             metrics = calculatePartialMetrics(avgFPS: avgFPS)
@@ -362,59 +380,8 @@ class VideoAnalyzer: NSObject, ObservableObject {
         state = .completed(metrics)
     }
     
-    private func calculateRealMetrics(trophy: TrophyPoseEvent, impact: ImpactEvent, avgFPS: Double) -> ServeMetrics {
-        // Timing
-        let tossToImpact = (impact.timestamp - trophy.timestamp) * 1000  // ms
-        
-        // Extract angles from pose history
-        var kneeFlexions: [Double] = []
-        var elbowAngles: [Double] = []
-        
-        for pose in poseHistory {
-            if let kneeAngle = PoseDetector.calculateKneeAngle(from: pose, isRight: true) {
-                kneeFlexions.append(kneeAngle)
-            }
-            
-            if let elbowAngle = PoseDetector.calculateElbowAngle(from: pose, isRight: true) {
-                elbowAngles.append(elbowAngle)
-            }
-        }
-        
-        let avgKnee = kneeFlexions.isEmpty ? 140.0 : kneeFlexions.reduce(0, +) / Double(kneeFlexions.count)
-        let avgElbow = elbowAngles.isEmpty ? 165.0 : elbowAngles.reduce(0, +) / Double(elbowAngles.count)
-        
-        // Calculate shoulder-pelvis tilt
-        var shoulderTilts: [Double] = []
-        for pose in poseHistory {
-            if let tilt = PoseDetector.calculateShoulderPelvisTilt(from: pose) {
-                shoulderTilts.append(tilt)
-            }
-        }
-        let avgTilt = shoulderTilts.isEmpty ? 15.0 : shoulderTilts.reduce(0, +) / Double(shoulderTilts.count)
-        
-        return ServeMetrics(
-            tossStabilityCV: 0.08,
-            shoulderPelvisTiltDeg: avgTilt,
-            kneeFlexionDeg: avgKnee,
-            elbowAngleDeg: avgElbow,
-            racketDropDeg: 54.1,
-            trunkTimingCorrelation: 0.72,
-            tossToImpactMs: tossToImpact,
-            score1_tossStability: 78,
-            score2_shoulderPelvisTilt: Int(100 - min(abs(avgTilt - 15) * 3, 100)),
-            score3_kneeFlexion: Int(100 - min(abs(avgKnee - 140) * 2, 100)),
-            score4_elbowAngle: Int(100 - min(abs(avgElbow - 170) * 2, 100)),
-            score5_racketDrop: 80,
-            score6_trunkTiming: 58,
-            score7_tossToImpactTiming: Int(100 - min(abs(tossToImpact - 450) / 5, 100)),
-            totalScore: 72,
-            timestamp: Date(),
-            flags: ["pose_detection", "real_metrics", "frames:\(frameCount)", "poses:\(poseHistory.count)", "fps:\(Int(avgFPS))"]
-        )
-    }
-    
     private func calculatePartialMetrics(avgFPS: Double) -> ServeMetrics {
-        // Use pose data but without impact timing
+        // Use pose data but without full metrics
         var kneeFlexions: [Double] = []
         var elbowAngles: [Double] = []
         
@@ -452,6 +419,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
         )
     }
     
+    // MARK: - Utility
     func reset() {
         print("🔄 Reset called")
         videoCaptureManager?.stopRecording()
@@ -493,6 +461,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
     func addIMUSample(_ sample: ServeSample) {
         watchIMUHistory.append(sample)
         
+        // 🔧 NEW: Pass to EventDetector
         if let eventDet = getOrCreateEventDetector() {
             eventDet.addIMUSample(sample)
         }
