@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		F91999F52EBBA7BF005B95C8 /* yolov8n.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = F91999F22EBBA58F005B95C8 /* yolov8n.mlpackage */; };
+		F9199A062EBF04B4005B95C8 /* best.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F9199A052EBF04B4005B95C8 /* best.mlpackage */; };
 		F97186EF2DE7052900E9A9EF /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F97186EE2DE7052900E9A9EF /* CoreMotion.framework */; };
 		F97187002DE710E600E9A9EF /* WatchConnectivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F97186FF2DE710E600E9A9EF /* WatchConnectivity.framework */; };
 		F97187022DE710EE00E9A9EF /* WatchConnectivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F97187012DE710EE00E9A9EF /* WatchConnectivity.framework */; };
@@ -41,6 +42,7 @@
 
 /* Begin PBXFileReference section */
 		F91999F22EBBA58F005B95C8 /* yolov8n.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = yolov8n.mlpackage; sourceTree = "<group>"; };
+		F9199A052EBF04B4005B95C8 /* best.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = best.mlpackage; sourceTree = "<group>"; };
 		F97186EE2DE7052900E9A9EF /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS11.4.sdk/System/Library/Frameworks/CoreMotion.framework; sourceTree = DEVELOPER_DIR; };
 		F97186FF2DE710E600E9A9EF /* WatchConnectivity.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WatchConnectivity.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.4.sdk/System/Library/Frameworks/WatchConnectivity.framework; sourceTree = DEVELOPER_DIR; };
 		F97187012DE710EE00E9A9EF /* WatchConnectivity.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WatchConnectivity.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS11.4.sdk/System/Library/Frameworks/WatchConnectivity.framework; sourceTree = DEVELOPER_DIR; };
@@ -107,6 +109,7 @@
 			isa = PBXGroup;
 			children = (
 				F91999F22EBBA58F005B95C8 /* yolov8n.mlpackage */,
+				F9199A052EBF04B4005B95C8 /* best.mlpackage */,
 			);
 			path = "ML Models";
 			sourceTree = "<group>";
@@ -254,6 +257,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F9199A062EBF04B4005B95C8 /* best.mlpackage in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
