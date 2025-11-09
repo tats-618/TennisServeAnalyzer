@@ -78,54 +78,64 @@ struct AnalysisResultsView: View {
         .cornerRadius(16)
     }
     
-    // MARK: - Metrics Section
+    // MARK: - Metrics Section (v0.2の8指標)
     private var metricsSection: some View {
         VStack(spacing: 16) {
-            Text("各項目のスコア")
+            Text("各項目のスコア（v0.2）")
                 .font(.headline)
                 .frame(maxWidth: .infinity, alignment: .leading)
             
             VStack(spacing: 12) {
                 metricRow(
-                    title: "1. トスの安定性",
-                    score: metrics.score1_tossStability,
-                    rawValue: String(format: "CV: %.1f%%", metrics.tossStabilityCV * 100)
-                )
-                
-                metricRow(
-                    title: "2. 肩-骨盤の傾き",
-                    score: metrics.score2_shoulderPelvisTilt,
-                    rawValue: String(format: "%.1f°", metrics.shoulderPelvisTiltDeg)
-                )
-                
-                metricRow(
-                    title: "3. 膝の屈曲",
-                    score: metrics.score3_kneeFlexion,
-                    rawValue: String(format: "%.1f°", metrics.kneeFlexionDeg)
-                )
-                
-                metricRow(
-                    title: "4. 肘の角度",
-                    score: metrics.score4_elbowAngle,
+                    title: "1. 肘の角度（トロフィー）",
+                    score: metrics.score1_elbowAngle,
                     rawValue: String(format: "%.1f°", metrics.elbowAngleDeg)
                 )
                 
                 metricRow(
-                    title: "5. ラケットドロップ",
-                    score: metrics.score5_racketDrop,
-                    rawValue: String(format: "%.1f°", metrics.racketDropDeg)
+                    title: "2. 脇の角度（トロフィー）",
+                    score: metrics.score2_armpitAngle,
+                    rawValue: String(format: "%.1f°", metrics.armpitAngleDeg)
                 )
                 
                 metricRow(
-                    title: "6. 体幹回旋のタイミング",
-                    score: metrics.score6_trunkTiming,
-                    rawValue: String(format: "相関: %.2f", metrics.trunkTimingCorrelation)
+                    title: "3. 下半身の貢献度（骨盤上昇）",
+                    score: metrics.score3_lowerBodyContribution,
+                    rawValue: String(format: "%.2fm", metrics.pelvisRiseM)
                 )
                 
                 metricRow(
-                    title: "7. トス→インパクトのタイミング",
-                    score: metrics.score7_tossToImpactTiming,
-                    rawValue: String(format: "%.0fms", metrics.tossToImpactMs)
+                    title: "4. 左手位置（体幹/伸展）",
+                    score: metrics.score4_leftHandPosition,
+                    rawValue: String(format: "体幹: %.1f° / 伸展: %.1f°",
+                                     metrics.leftArmTorsoAngleDeg,
+                                     metrics.leftArmExtensionDeg)
+                )
+                
+                metricRow(
+                    title: "5. 体の軸の傾き（インパクト）",
+                    score: metrics.score5_bodyAxisTilt,
+                    rawValue: String(format: "Δθ=%.1f°", metrics.bodyAxisDeviationDeg)
+                )
+                
+                metricRow(
+                    title: "6. ラケット面の角度（インパクト）",
+                    score: metrics.score6_racketFaceAngle,
+                    rawValue: String(format: "Yaw: %.1f° / Pitch: %.1f°",
+                                     metrics.racketFaceYawDeg,
+                                     metrics.racketFacePitchDeg)
+                )
+                
+                metricRow(
+                    title: "7. トスの位置（前方距離）",
+                    score: metrics.score7_tossPosition,
+                    rawValue: String(format: "%.2fm", metrics.tossForwardDistanceM)
+                )
+                
+                metricRow(
+                    title: "8. リストワーク（総回転）",
+                    score: metrics.score8_wristwork,
+                    rawValue: String(format: "%.0f°", metrics.wristRotationDeg)
                 )
             }
         }
@@ -262,74 +272,111 @@ struct AnalysisResultsView: View {
         }
     }
     
-    // 📍 ファイルの最後（約300行目以降）を以下に置き換え
-
-        // MARK: - Helper Functions
-        private func scoreColor(_ score: Int) -> Color {
-            if score >= 80 {
-                return Color(red: 0x3C / 255.0, green: 0xC7 / 255.0, blue: 0x6A / 255.0)  // Green
-            } else if score >= 60 {
-                return Color(red: 0xF7 / 255.0, green: 0xC7 / 255.0, blue: 0x44 / 255.0)  // Yellow
-            } else {
-                return Color(red: 0xE8 / 255.0, green: 0x5C / 255.0, blue: 0x5C / 255.0)  // Red
-            }
-        }
-        
-        private func scoreMessage(_ score: Int) -> String {
-            if score >= 80 {
-                return "素晴らしい！"
-            } else if score >= 60 {
-                return "良いフォームです"
-            } else {
-                return "改善の余地があります"
-            }
-        }
-        
-        private func progressWidth(score: Int) -> CGFloat {
-            let screenWidth = UIScreen.main.bounds.width - 64  // Account for padding
-            return CGFloat(score) / 100.0 * screenWidth
-        }
-        
-        private func generatePrioritizedFeedback() -> [(title: String, message: String, score: Int)] {
-            let allMetrics: [(title: String, message: String, score: Int)] = [
-                (title: "トスの安定性", message: "トスの高さを一定に保ちましょう。同じ位置に繰り返しトスできるよう練習しましょう。", score: metrics.score1_tossStability),
-                (title: "肩-骨盤の傾き", message: "トロフィーポーズで上体をもっと傾けましょう。肩のラインが骨盤より傾くイメージです。", score: metrics.score2_shoulderPelvisTilt),
-                (title: "膝の屈曲", message: "膝をもっと曲げましょう。下半身のパワーを活用できます。", score: metrics.score3_kneeFlexion),
-                (title: "肘の角度", message: "トロフィーポーズで肘をもっと伸ばしましょう。腕を高く上げる意識を持ちましょう。", score: metrics.score4_elbowAngle),
-                (title: "ラケットドロップ", message: "ラケットをもっと深く落としましょう。背中側により大きく引くイメージです。", score: metrics.score5_racketDrop),
-                (title: "体幹回旋のタイミング", message: "体幹回旋のタイミングを調整しましょう。ラケットが落ちきってから回旋を開始します。", score: metrics.score6_trunkTiming),
-                (title: "トス→インパクトのタイミング", message: "トスとインパクトのタイミングを調整しましょう。トスの高さを少し変えてみましょう。", score: metrics.score7_tossToImpactTiming)
-            ]
-            
-            // Sort by score (ascending) and take top 2
-            let sorted = allMetrics.sorted { $0.score < $1.score }
-            return Array(sorted.prefix(2))
+    // MARK: - Helper Functions
+    private func scoreColor(_ score: Int) -> Color {
+        if score >= 80 {
+            return Color(red: 0x3C / 255.0, green: 0xC7 / 255.0, blue: 0x6A / 255.0)  // Green
+        } else if score >= 60 {
+            return Color(red: 0xF7 / 255.0, green: 0xC7 / 255.0, blue: 0x44 / 255.0)  // Yellow
+        } else {
+            return Color(red: 0xE8 / 255.0, green: 0x5C / 255.0, blue: 0x5C / 255.0)  // Red
         }
     }
-
-    // MARK: - Preview
-    #Preview {
-        AnalysisResultsView(
-            metrics: ServeMetrics(
-                tossStabilityCV: 0.08,
-                shoulderPelvisTiltDeg: 15.2,
-                kneeFlexionDeg: 142.3,
-                elbowAngleDeg: 168.5,
-                racketDropDeg: 54.1,
-                trunkTimingCorrelation: 0.72,
-                tossToImpactMs: 467.0,
-                score1_tossStability: 78,
-                score2_shoulderPelvisTilt: 92,
-                score3_kneeFlexion: 88,
-                score4_elbowAngle: 95,
-                score5_racketDrop: 80,
-                score6_trunkTiming: 58,
-                score7_tossToImpactTiming: 74,
-                totalScore: 81,
-                timestamp: Date(),
-                flags: ["sample"]
+    
+    private func scoreMessage(_ score: Int) -> String {
+        if score >= 80 {
+            return "素晴らしい！"
+        } else if score >= 60 {
+            return "良いフォームです"
+        } else {
+            return "改善の余地があります"
+        }
+    }
+    
+    private func progressWidth(score: Int) -> CGFloat {
+        let screenWidth = UIScreen.main.bounds.width - 64  // Account for padding
+        return CGFloat(score) / 100.0 * screenWidth
+    }
+    
+    private func generatePrioritizedFeedback() -> [(title: String, message: String, score: Int)] {
+        // v0.2の8指標に対応
+        let all: [(title: String, message: String, score: Int)] = [
+            (
+                title: "肘の角度",
+                message: "トロフィーポーズで肘をもう少し伸ばし、高く構えましょう。",
+                score: metrics.score1_elbowAngle
             ),
-            onRetry: { print("Retry") },
-            onFinish: { print("Finish") }
-        )
+            (
+                title: "脇の角度",
+                message: "上腕と体幹の間を保ち、胸郭を開きすぎ/詰めすぎに注意。",
+                score: metrics.score2_armpitAngle
+            ),
+            (
+                title: "下半身の貢献度",
+                message: "膝をためて骨盤を持ち上げる動作を強調。リズムよく伸展しましょう。",
+                score: metrics.score3_lowerBodyContribution
+            ),
+            (
+                title: "左手位置",
+                message: "左腕を体幹前で高く保ち、肘は適度に伸展してトスの安定を。",
+                score: metrics.score4_leftHandPosition
+            ),
+            (
+                title: "体軸の傾き",
+                message: "インパクトで腰角・膝角が一直線に近づくように体幹を安定。",
+                score: metrics.score5_bodyAxisTilt
+            ),
+            (
+                title: "ラケット面の角度",
+                message: "インパクト直前のYaw/Pitchを0付近に収束させ、面ブレを抑制。",
+                score: metrics.score6_racketFaceAngle
+            ),
+            (
+                title: "トスの位置",
+                message: "前方0.2–0.6mを目安に。コートキャリブ後に再調整を。",
+                score: metrics.score7_tossPosition
+            ),
+            (
+                title: "リストワーク",
+                message: "総回転120–220°を目安に。過小/過多はいずれも球威低下要因。",
+                score: metrics.score8_wristwork
+            )
+        ]
+        
+        // Score昇順でワースト2を返す
+        return Array(all.sorted { $0.score < $1.score }.prefix(2))
     }
+}
+
+// MARK: - Preview
+#Preview {
+    let sample = ServeMetrics(
+        elbowAngleDeg: 168.5,
+        armpitAngleDeg: 92.0,
+        pelvisRiseM: 0.18,
+        leftArmTorsoAngleDeg: 65.0,
+        leftArmExtensionDeg: 170.0,
+        bodyAxisDeviationDeg: 6.2,
+        racketFaceYawDeg: 8.5,
+        racketFacePitchDeg: 6.0,
+        tossForwardDistanceM: 0.35,
+        wristRotationDeg: 180.0,
+        score1_elbowAngle: 95,
+        score2_armpitAngle: 88,
+        score3_lowerBodyContribution: 90,
+        score4_leftHandPosition: 84,
+        score5_bodyAxisTilt: 78,
+        score6_racketFaceAngle: 86,
+        score7_tossPosition: 92,
+        score8_wristwork: 80,
+        totalScore: 86,
+        timestamp: Date(),
+        flags: []
+    )
+    return AnalysisResultsView(
+        metrics: sample,
+        onRetry: { print("Retry") },
+        onFinish: { print("Finish") }
+    )
+}
+

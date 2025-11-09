@@ -1,6 +1,11 @@
-//
-//  YOLOBallDetector.swift (FINE-TUNED MODEL VERSION) — color filter gated
+//なう
+//  YOLOBallDetector.swift (FINAL OPTIMIZED VERSION)
 //  TennisServeAnalyzer
+//
+//  ✅ OPTIMIZATIONS:
+//  - Position filter: 0.04 → 0.10 (relaxed)
+//  - High confidence: 0.75 (fine-tuned model)
+//  - Color filter: DISABLED (fine-tuned model doesn't need it)
 //
 
 import Foundation
@@ -24,19 +29,21 @@ class YOLOBallDetector {
     private var usingFineTuned: Bool = false
 
     // Thresholds
-    private var highConfidence: Float = 0.75   // 主判定用（UI 表示はこれ以上）
-    private var lowConfidence:  Float = 0.55   // 追跡補助用（必要なら）
-    private let confBypassColor: Float = 0.90  // これ以上は色フィルタ無視
+    private var highConfidence: Float = 0.75
+    private var lowConfidence:  Float = 0.55
+    private let confBypassColor: Float = 0.90
 
+    // ✅ OPTIMIZED: Relaxed position filter
+    private let excludeBottomRatio: CGFloat = 0.10  // 0.04 → 0.10
+    
     // Filters
-    private let excludeBottomRatio: CGFloat = 0.04
     private let minRadius: CGFloat = 3.0
     private let maxRadius: CGFloat = 35.0
 
     private let enableBrightnessFilter = true
     private let maxAverageBrightness: Double = 220.0
 
-    // カラー判定はゲート管理（FTモデルでは無効）
+    // Color filter (FT model doesn't need it)
     private var enableColorFilter: Bool = false
 
     // Motion filter
@@ -89,22 +96,21 @@ class YOLOBallDetector {
             print("✅ Model loaded: \(name)")
 
             if usingFineTuned {
-                // FT 前提値
+                // FT settings
                 highConfidence = 0.75
                 lowConfidence  = 0.55
-                // ★ ファインチューニング済みではカラー判定を無効化
                 enableColorFilter = false
                 print("🎾 Fine-tuned model active")
             } else {
-                // 既定
+                // Default settings
                 highConfidence = 0.65
                 lowConfidence  = 0.50
-                // 旧汎用モデルのみ必要なら true にする
                 enableColorFilter = true
             }
 
             print("🏟 Detection thresholds: high=\(highConfidence), low=\(lowConfidence)")
             print("   Size=\(Int(minRadius))–\(Int(maxRadius))px, Bright<\(Int(maxAverageBrightness))")
+            print("   Position: exclude bottom \(Int(excludeBottomRatio * 100))%")
             print("   Color filter: \(enableColorFilter ? "ENABLED" : "DISABLED") (auto by model)")
         } catch {
             print("❌ Failed to load model: \(error)")
@@ -158,7 +164,7 @@ class YOLOBallDetector {
         for obs in results {
             totalCandidates += 1
 
-            // クラス確認（"ball" or class index "0"）
+            // Class check ("ball" or "0")
             let isBall = obs.labels.contains { l in
                 let id = l.identifier.lowercased()
                 return id == ballClassIdentifier || id == "0"
@@ -166,16 +172,18 @@ class YOLOBallDetector {
             guard isBall else { continue }
 
             let conf = obs.confidence
-            // 主判定閾値（UI表示候補）
             guard conf >= highConfidence else { continue }
 
-            // Rect（Visionのピクセル座標＝原点:左下想定）
+            // Rect (Vision coordinates: origin bottom-left)
             let rect = VNImageRectForNormalizedRect(obs.boundingBox, Int(imageSize.width), Int(imageSize.height))
             let r = min(rect.width, rect.height) / 2.0
 
             // Size
             if r < minRadius || r > maxRadius {
                 rejectedBySize += 1
+                if r > maxRadius && detectionCount % 30 == 0 {
+                    print("🚫 Rejected LARGE: r=\(Int(r))px (likely light)")
+                }
                 continue
             }
 
@@ -186,11 +194,16 @@ class YOLOBallDetector {
                 continue
             }
 
-            // Position (exclude bottom)
+            // ✅ OPTIMIZED: Position filter (relaxed)
             let centerY = rect.midY
-            let bottom = imageSize.height * (1.0 - excludeBottomRatio)
-            if centerY > bottom {
+            let bottomBoundary = imageSize.height * (1.0 - excludeBottomRatio)
+            
+            if centerY > bottomBoundary {
                 rejectedByPosition += 1
+                // Debug log (less frequent)
+                if detectionCount % 30 == 0 {
+                    print("🚫 Pos reject: y=\(Int(centerY)) > \(Int(bottomBoundary)) (h=\(Int(imageSize.height)))")
+                }
                 continue
             }
 
@@ -199,11 +212,14 @@ class YOLOBallDetector {
                 let avgB = calculateAverageBrightness(in: pixelBuffer, boundingBox: rect)
                 if avgB > maxAverageBrightness {
                     rejectedByBrightness += 1
+                    if detectionCount % 30 == 0 {
+                        print("💡 Rejected BRIGHT: brightness=\(Int(avgB))")
+                    }
                     continue
                 }
             }
 
-            // Color（FTでは通常無効。高信頼はスキップ）
+            // Color (FT model: disabled. High confidence: bypassed)
             if enableColorFilter && conf < confBypassColor {
                 if !passesColorHeuristic(in: pixelBuffer, rect: rect) {
                     rejectedByColor += 1
@@ -212,20 +228,20 @@ class YOLOBallDetector {
             }
 
             // Motion
-            let centerImageSpace = CGPoint(x: rect.midX, y: rect.midY) // 原点:左下
+            let centerImageSpace = CGPoint(x: rect.midX, y: rect.midY)
             if !hasSignificantMotionOrNew(position: centerImageSpace, radius: r, timestamp: timestamp) {
                 rejectedByMotion += 1
                 continue
             }
 
             acceptedDetections += 1
-            if detectionCount % 10 == 0 {
-                print("🔎 obs labels: ball(1.00) conf: \(String(format: "%.2f", conf))")
+            if detectionCount % 15 == 0 {
+                print("✅ Ball: conf=\(String(format: "%.2f", conf)), r=\(Int(r))px, y=\(Int(centerY))")
             }
             candidates.append((obs, rect, conf))
         }
 
-        // デバッグまとめ
+        // Debug summary
         if detectionCount % 60 == 0 && totalCandidates > 0 {
             let rate = totalCandidates > 0 ? Double(acceptedDetections) / Double(totalCandidates) * 100.0 : 0.0
             print("📊 Last ~60 frames:")
@@ -239,19 +255,18 @@ class YOLOBallDetector {
 
         guard let best = candidates.min(by: { $0.rect.midY < $1.rect.midY }) else { return nil }
 
-        // --- ここから返却ブロックは1つだけ ---
-        // UI（原点=左上）に合わせて y を反転して返す
+        // Convert to UI coordinates (origin: top-left)
         let rect = best.rect
-        let centerImageSpace = CGPoint(x: rect.midX, y: rect.midY) // Vision座標（左下）
+        let centerImageSpace = CGPoint(x: rect.midX, y: rect.midY)  // Vision (bottom-left)
         let uiCenter = CGPoint(x: centerImageSpace.x,
-                               y: imageSize.height - centerImageSpace.y) // UI座標（左上）へ
+                               y: imageSize.height - centerImageSpace.y)  // UI (top-left)
         let radius = min(rect.width, rect.height) / 2.0
 
-        // Motion 履歴は画像座標（反転前）で保持
+        // Motion history: use image space coordinates
         addToMotionHistory(position: centerImageSpace, radius: radius, confidence: best.score, timestamp: timestamp)
 
         return BallDetection(
-            position: uiCenter,          // UI 用座標
+            position: uiCenter,
             radius: radius,
             confidence: best.score,
             timestamp: timestamp,
@@ -259,10 +274,9 @@ class YOLOBallDetector {
         )
     }
 
-    // MARK: - Color heuristic (ゲートで呼ばれるだけ)
+    // MARK: - Color heuristic (gate-controlled, very lenient)
     private func passesColorHeuristic(in pixelBuffer: CVPixelBuffer, rect: CGRect) -> Bool {
-        // 既存のカラー判定ロジックがあればここで実装。
-        // 今回は誤除外回避のため非常に緩く通過。
+        // Very lenient to avoid false negatives
         return true
     }
 
@@ -371,4 +385,3 @@ class YOLOBallDetector {
         print("🔄 YOLOBallDetector reset")
     }
 }
-

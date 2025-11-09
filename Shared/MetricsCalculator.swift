@@ -2,448 +2,379 @@
 //  MetricsCalculator.swift
 //  TennisServeAnalyzer
 //
-//  Created by 島本健生 on 2025/10/28.
-//
-
-//
-//  MetricsCalculator.swift
-//  TennisServeAnalyzer
-//
-//  7-Metric Calculation and Scoring System
-//  All metrics normalized to 0-100 using piecewise linear functions
+//  v0.2 — 8-Metric Calculation and Scoring (0–100 normalized)
+//  ※ 後方互換のため calculateMetrics に末尾パラメータを追加（デフォルト引数）
 //
 
 import Foundation
 import CoreGraphics
 
-// MARK: - Serve Metrics
+// MARK: - Serve Metrics (v0.2 定義に同期)
 struct ServeMetrics: Codable {
-    // Raw values
-    let tossStabilityCV: Double
-    let shoulderPelvisTiltDeg: Double
-    let kneeFlexionDeg: Double
-    let elbowAngleDeg: Double
-    let racketDropDeg: Double
-    let trunkTimingCorrelation: Double
-    let tossToImpactMs: Double
-    
-    // Normalized scores (0-100)
-    let score1_tossStability: Int
-    let score2_shoulderPelvisTilt: Int
-    let score3_kneeFlexion: Int
-    let score4_elbowAngle: Int
-    let score5_racketDrop: Int
-    let score6_trunkTiming: Int
-    let score7_tossToImpactTiming: Int
-    
-    // Total score (weighted average)
-    let totalScore: Int
-    
+    // Raw values (8 指標)
+    public let elbowAngleDeg: Double                 // 1: 肘角（Trophy）
+    public let armpitAngleDeg: Double               // 2: 脇角（Trophy）
+    public let pelvisRiseM: Double                  // 3: 下半身貢献度（Trophy→Impact直前20–30msの骨盤上昇）
+    public let leftArmTorsoAngleDeg: Double         // 4a: 左手位置（体幹-左腕）
+    public let leftArmExtensionDeg: Double          // 4b: 左手位置（上腕-前腕）
+    public let bodyAxisDeviationDeg: Double         // 5: 体軸傾き（腰角/膝角の偏差平均, Impact）
+    public let racketFaceYawDeg: Double             // 6a: ラケット面（Yaw）
+    public let racketFacePitchDeg: Double           // 6b: ラケット面（Pitch）
+    public let tossForwardDistanceM: Double         // 7: トス前方距離[m]
+    public let wristRotationDeg: Double             // 8: リストワーク（Trophy→Impactの回内外合計角度）
+
+    // Scores (0–100)
+    public let score1_elbowAngle: Int
+    public let score2_armpitAngle: Int
+    public let score3_lowerBodyContribution: Int
+    public let score4_leftHandPosition: Int
+    public let score5_bodyAxisTilt: Int
+    public let score6_racketFaceAngle: Int
+    public let score7_tossPosition: Int
+    public let score8_wristwork: Int
+
+    // Total score (weighted)
+    public let totalScore: Int
+
     // Metadata
-    let timestamp: Date
-    let flags: [String]
+    public let timestamp: Date
+    public let flags: [String] // 不足データなどの注記
 }
 
-// MARK: - Metrics Calculator
-class MetricsCalculator {
-    
-    // MARK: - Weights (sum = 100)
-    private static let weights: [Double] = [15, 15, 15, 10, 15, 15, 15]
-    
-    // MARK: - Main Calculation
+// MARK: - Weights (sum = 100)
+private let METRIC_WEIGHTS: [Double] = [
+    10, // 1 肘
+    10, // 2 脇
+    20, // 3 下半身貢献
+    10, // 4 左手位置
+    15, // 5 体軸
+    10, // 6 ラケット面
+    10, // 7 トス位置
+    15  // 8 リストワーク
+]
+
+// MARK: - Calculator
+enum MetricsCalculator {
+
+    /// v0.2 指標でのメイン計算
+    /// - Parameters:
+    ///   - trophyPose: トロフィーポーズイベント（pose / timestamp / elbowAngle など）
+    ///   - impactEvent: インパクトイベント（monotonicMs / 可能なら pose）
+    ///   - tossHistory: ボール頂点検出履歴（トス位置推定に使用）
+    ///   - imuHistory: Trophy→Impact 区間のIMUサンプル
+    ///   - calibration: ラケット座標系キャリブ結果（任意）
+    ///   - courtCalibration: コートホモグラフィ（任意, あれば[m]へ換算）
+    ///   - impactPose: 可能ならインパクト時のPose（任意, 未指定ならTrophyで代替）
     static func calculateMetrics(
         trophyPose: TrophyPoseEvent,
         impactEvent: ImpactEvent,
         tossHistory: [BallDetection],
         imuHistory: [ServeSample],
-        calibration: CalibrationResult? // 仮の型
+        calibration: CalibrationResult? = nil,
+        courtCalibration: CourtCalibration? = nil,
+        impactPose: PoseData? = nil
     ) -> ServeMetrics {
-        
+
         var flags: [String] = []
-        
-        // 1. Toss Stability
-        let tossCV = calculateTossStability(tossHistory: tossHistory)
-        let score1 = normalizeTossStability(cv: tossCV)
-        
-        // 2. Shoulder-Pelvis Tilt
-        let shoulderTilt = calculateShoulderPelvisTilt(pose: trophyPose.pose)
-        let score2 = normalizeShoulderPelvisTilt(tilt: shoulderTilt)
-        
-        // 3. Knee Flexion
-        let kneeFlexion = calculateKneeFlexion(pose: trophyPose.pose)
-        let score3 = normalizeKneeFlexion(angle: kneeFlexion)
-        
-        // 4. Elbow Angle
-        let elbowAngle = trophyPose.elbowAngle ?? 0.0
-        let score4 = normalizeElbowAngle(angle: elbowAngle)
-        
-        // 5. Racket Drop
-        let racketDrop = calculateRacketDrop(
+
+        // ========= 1) 肘角（Trophy） =========
+        let elbowAngle = trophyPose.elbowAngle
+            ?? PoseDetector.calculateElbowAngle(from: trophyPose.pose, isRight: true) ?? 0.0
+        let score1 = scoreElbowAngle(elbowAngle)
+
+        // ========= 2) 脇角（Trophy） =========
+        let armpit = PoseDetector.armpitAngle(trophyPose.pose, side: .right) ?? 0.0
+        let score2 = scoreArmpitAngle(armpit)
+
+        // ========= 3) 下半身貢献度（骨盤上昇[m]）=========
+        // Trophy と Impact 付近の Pose が必要。なければフラグを立てて 0 扱い。
+        let impactPoseResolved = impactPose ?? trophyPose.pose // フォールバック（※理想は Impact）
+        var pelvisRiseM = pelvisRiseMeters(trophyPose.pose, impactPoseResolved)
+        if impactPose == nil { flags.append("no_impact_pose_for_pelvisRise") }
+        let score3 = scorePelvisRise(pelvisRiseM)
+
+        // ========= 4) 左手位置（Trophy）=========
+        let (leftTorso, leftExt) = PoseDetector.leftHandAngles(trophyPose.pose)
+            ?? (Double.nan, Double.nan)
+        let score4 = scoreLeftHandPosition(torsoAngle: leftTorso, extensionAngle: leftExt)
+
+        // ========= 5) 体軸傾き（Impact 時理想, なければ Trophy）=========
+        let bodyAxis = PoseDetector.bodyAxisDelta(impactPoseResolved) ?? 999.0
+        if bodyAxis == 999.0 { flags.append("body_axis_calc_failed") }
+        let score5 = scoreBodyAxisTilt(bodyAxis)
+
+        // ========= 6) ラケット面角（Pitch / Yaw）=========
+        // キャリブレーションが無ければ近傍 IMU から近似（小窓積分の変位角）
+        let (rfYaw, rfPitch, rfFlag) = estimateRacketFace(imuHistory: imuHistory,
+                                                          impactMs: impactEvent.monotonicMs,
+                                                          calibration: calibration)
+        if let f = rfFlag { flags.append(f) }
+        let score6 = scoreRacketFace(yaw: rfYaw, pitch: rfPitch)
+
+        // ========= 7) トス前進距離[m] =========
+        let (tossM, tossFlag) = estimateTossForwardDistance(
+            tossHistory: tossHistory,
+            poseRef: trophyPose.pose,
+            courtCalib: courtCalibration
+        )
+        if let f = tossFlag { flags.append(f) }
+        let score7 = scoreTossForward(tossM)
+
+        // ========= 8) リストワーク（合計回内外角度）=========
+        let wristDeg = estimateWristRotationDeg(
             imuHistory: imuHistory,
-            impactTime: impactEvent.monotonicMs,
-            calibration: calibration // 仮の引数
+            startMs: Int64(trophyPose.timestamp * 1000.0),
+            endMs: impactEvent.monotonicMs
         )
-        let score5 = normalizeRacketDrop(drop: racketDrop)
-        
-        if calibration == nil {
-            flags.append("no_calibration")
-        }
-        
-        // 6. Trunk Rotation Timing
-        let trunkTiming = calculateTrunkRotationTiming(
-            imuHistory: imuHistory,
-            impactTime: impactEvent.monotonicMs
-        )
-        let score6 = normalizeTrunkTiming(correlation: trunkTiming)
-        
-        // 7. Toss to Impact Timing
-        let tossToImpact = calculateTossToImpactDelay(
-            tossTime: trophyPose.timestamp,
-            impactTime: Double(impactEvent.monotonicMs) / 1000.0
-        )
-        let score7 = normalizeTossToImpactTiming(delay: tossToImpact)
-        
-        // Calculate total score
-        let scores = [score1, score2, score3, score4, score5, score6, score7]
-        let totalScore = calculateTotalScore(scores: scores.map { Double($0) })
-        
+        let score8 = scoreWristwork(wristDeg)
+
+        // ========= 合計 =========
+        let scores = [score1, score2, score3, score4, score5, score6, score7, score8]
+        let total = weightedTotal(scores.map { Double($0) }, weights: METRIC_WEIGHTS)
+
+
         return ServeMetrics(
-            tossStabilityCV: tossCV,
-            shoulderPelvisTiltDeg: shoulderTilt,
-            kneeFlexionDeg: kneeFlexion,
             elbowAngleDeg: elbowAngle,
-            racketDropDeg: racketDrop,
-            trunkTimingCorrelation: trunkTiming,
-            tossToImpactMs: tossToImpact * 1000,
-            score1_tossStability: score1,
-            score2_shoulderPelvisTilt: score2,
-            score3_kneeFlexion: score3,
-            score4_elbowAngle: score4,
-            score5_racketDrop: score5,
-            score6_trunkTiming: score6,
-            score7_tossToImpactTiming: score7,
-            totalScore: totalScore,
+            armpitAngleDeg: armpit,
+            pelvisRiseM: pelvisRiseM,
+            leftArmTorsoAngleDeg: leftTorso,
+            leftArmExtensionDeg: leftExt,
+            bodyAxisDeviationDeg: bodyAxis,
+            racketFaceYawDeg: rfYaw,
+            racketFacePitchDeg: rfPitch,
+            tossForwardDistanceM: tossM,
+            wristRotationDeg: wristDeg,
+            score1_elbowAngle: score1,
+            score2_armpitAngle: score2,
+            score3_lowerBodyContribution: score3,
+            score4_leftHandPosition: score4,
+            score5_bodyAxisTilt: score5,
+            score6_racketFaceAngle: score6,
+            score7_tossPosition: score7,
+            score8_wristwork: score8,
+            totalScore: Int(total),
             timestamp: Date(),
             flags: flags
         )
     }
-    
-    // MARK: - Individual Metrics
-    
-    // 1. Toss Stability (Coefficient of Variation)
-    static func calculateTossStability(tossHistory: [BallDetection]) -> Double {
-        let heights = tossHistory.map { $0.position.y }
-        guard heights.count >= 2 else { return 999.0 }
-        
-        let mean = heights.reduce(0, +) / CGFloat(heights.count)
-        let variance = heights.map { pow($0 - mean, 2) }.reduce(0, +) / CGFloat(heights.count)
-        let stdDev = sqrt(variance)
-        
-        let cv = Double(stdDev / mean)
-        return cv
-    }
-    
-    static func normalizeTossStability(cv: Double) -> Int {
-        // CV < 5%: 100 points
-        // CV 5-10%: 80-100 points (linear)
-        // CV 10-20%: 50-80 points (linear)
-        // CV > 20%: 0-50 points (linear)
-        
-        if cv < 0.05 {
-            return 100
-        } else if cv < 0.10 {
-            return Int(100 - (cv - 0.05) / 0.05 * 20)
-        } else if cv < 0.20 {
-            return Int(80 - (cv - 0.10) / 0.10 * 30)
-        } else {
-            return max(0, Int(50 - (cv - 0.20) / 0.20 * 50))
+
+    // MARK: - 1) 肘角
+    private static func scoreElbowAngle(_ angle: Double) -> Int {
+        // Ideal: 160–180°, 140–160/段階, 120–140/段階, <120 減点
+        switch angle {
+        case 160...180: return 100
+        case 140..<160: return lerp(from: 70, to: 100, x: (angle-140)/20)
+        case 120..<140: return lerp(from: 40, to: 70, x: (angle-120)/20)
+        case ..<120:    return max(0, Int(40 * angle / 120))
+        default:        return 0
         }
     }
-    
-    // 2. Shoulder-Pelvis Tilt
-    // ⬇️ 修正箇所: PoseDetector.swift に実装されたメソッドを呼び出すように変更
-    static func calculateShoulderPelvisTilt(pose: PoseData) -> Double {
-        // PoseDetector.swift に実装されたメソッドを呼び出す
-        return PoseDetector.calculateShoulderPelvisTilt(from: pose) ?? 0.0
+
+    // MARK: - 2) 脇角（上腕-体幹の外角）
+    private static func scoreArmpitAngle(_ angle: Double) -> Int {
+        // Ideal帯は 80–110°（胸郭を開きつつ詰め過ぎない）
+        if (80...110).contains(angle) { return 100 }
+        if (60..<80).contains(angle)  { return lerp(from: 70, to: 100, x: (angle-60)/20) }
+        if (110..<130).contains(angle){ return lerp(from: 100, to: 70, x: (angle-110)/20) }
+        if (45..<60).contains(angle)  { return lerp(from: 40, to: 70, x: (angle-45)/15) }
+        if (130..<150).contains(angle){ return lerp(from: 70, to: 40, x: (angle-130)/20) }
+        if angle < 45 { return max(0, Int(40 * angle / 45)) }
+        return max(0, Int(40 - (angle - 150)/30 * 40))
     }
-    
-    static func normalizeShoulderPelvisTilt(tilt: Double) -> Int {
-        // Optimal: 10-20 degrees (100 points)
-        // 5-10 or 20-30: 70-100 points
-        // 0-5 or 30-45: 40-70 points
-        // > 45: 0-40 points
-        
-        let absTilt = abs(tilt)
-        
-        if absTilt >= 10 && absTilt <= 20 {
-            return 100
-        } else if absTilt >= 5 && absTilt < 10 {
-            return Int(70 + (absTilt - 5) / 5 * 30)
-        } else if absTilt >= 20 && absTilt < 30 {
-            return Int(100 - (absTilt - 20) / 10 * 30)
-        } else if absTilt >= 0 && absTilt < 5 {
-            return Int(40 + absTilt / 5 * 30)
-        } else if absTilt >= 30 && absTilt < 45 {
-            return Int(70 - (absTilt - 30) / 15 * 30)
-        } else {
-            return max(0, Int(40 - (absTilt - 45) / 15 * 40))
+
+    // MARK: - 3) 下半身貢献度（骨盤上昇）
+    private static func pelvisRiseMeters(_ trophy: PoseData, _ impact: PoseData) -> Double {
+        // 右/左 Hip の中点のY差を画素→相対→mへ換算
+        guard let rH = trophy.joints[.rightHip], let lH = trophy.joints[.leftHip],
+              let rA = trophy.joints[.rightAnkle], let lA = trophy.joints[.leftAnkle],
+              let rH2 = impact.joints[.rightHip], let lH2 = impact.joints[.leftHip] else {
+            return 0.0
         }
+        let hipMid1 = CGPoint(x: (rH.x + lH.x)/2, y: (rH.y + lH.y)/2)
+        let hipMid2 = CGPoint(x: (rH2.x + lH2.x)/2, y: (rH2.y + lH2.y)/2)
+
+        // 画素→身長スケーリング：股関節-足首距離を 0.53H とみなして相対尺度化
+        let pixLeg = (hypot(rH.x-rA.x, rH.y-rA.y) + hypot(lH.x-lA.x, lH.y-lA.y)) / 2.0
+        guard pixLeg > 0 else { return 0.0 }
+
+        let pixRise = max(0.0, hipMid1.y - hipMid2.y) // 上昇は画面座標で y 減少
+        let riseToLeg = Double(pixRise / pixLeg)      // 下肢長比
+        // 成人平均下肢長 ≈ 0.9m（概算）→ m換算（キャリブなしの一時実装）
+        return riseToLeg * 0.9
     }
-    
-    // 3. Knee Flexion
-    static func calculateKneeFlexion(pose: PoseData) -> Double {
-        // Average of both knees
-        let rightKnee = PoseDetector.calculateKneeAngle(from: pose, isRight: true) ?? 180.0
-        let leftKnee = PoseDetector.calculateKneeAngle(from: pose, isRight: false) ?? 180.0
-        
-        return (rightKnee + leftKnee) / 2.0
+
+    private static func scorePelvisRise(_ meters: Double) -> Int {
+        // 設計：0.12–0.25m で高評価
+        if (0.12...0.25).contains(meters) { return 100 }
+        if (0.08..<0.12).contains(meters) { return lerp(from: 70, to: 100, x: (meters-0.08)/0.04) }
+        if (0.25..<0.32).contains(meters) { return lerp(from: 100, to: 70, x: (meters-0.25)/0.07) }
+        if (0.04..<0.08).contains(meters) { return lerp(from: 40, to: 70, x: (meters-0.04)/0.04) }
+        if (0.32..<0.40).contains(meters) { return lerp(from: 70, to: 40, x: (meters-0.32)/0.08) }
+        if meters < 0.04 { return max(0, Int(40 * meters / 0.04)) }
+        return max(0, Int(40 - (meters - 0.40)/0.20 * 40))
     }
-    
-    static func normalizeKneeFlexion(angle: Double) -> Int {
-        // Optimal: 130-150 degrees (100 points)
-        // 120-130 or 150-160: 70-100 points
-        // 100-120 or 160-180: 40-70 points
-        // < 100: 0-40 points
-        
-        if angle >= 130 && angle <= 150 {
-            return 100
-        } else if angle >= 120 && angle < 130 {
-            return Int(70 + (angle - 120) / 10 * 30)
-        } else if angle >= 150 && angle < 160 {
-            return Int(100 - (angle - 150) / 10 * 30)
-        } else if angle >= 100 && angle < 120 {
-            return Int(40 + (angle - 100) / 20 * 30)
-        } else if angle >= 160 && angle <= 180 {
-            return Int(70 - (angle - 160) / 20 * 30)
-        } else {
-            return max(0, Int(40 - (100 - angle) / 20 * 40))
-        }
+
+    // MARK: - 4) 左手位置（体幹-左腕 & 上腕-前腕の2角度の合成）
+    private static func scoreLeftHandPosition(torsoAngle: Double, extensionAngle: Double) -> Int {
+        // torsoAngle（肩頂: neck–leftShoulder–leftElbow） ideal 50–80°
+        // extensionAngle（肘: leftShoulder–leftElbow–leftWrist） ideal 160–180°
+        let s1: Int
+        if (50...80).contains(torsoAngle) { s1 = 100 }
+        else if (35..<50).contains(torsoAngle) { s1 = lerp(from: 70, to: 100, x: (torsoAngle-35)/15) }
+        else if (80..<95).contains(torsoAngle) { s1 = lerp(from: 100, to: 70, x: (torsoAngle-80)/15) }
+        else if (25..<35).contains(torsoAngle) { s1 = lerp(from: 40, to: 70, x: (torsoAngle-25)/10) }
+        else if (95..<110).contains(torsoAngle) { s1 = lerp(from: 70, to: 40, x: (torsoAngle-95)/15) }
+        else if torsoAngle < 25 { s1 = max(0, Int(40 * torsoAngle / 25)) }
+        else { s1 = max(0, Int(40 - (torsoAngle - 110)/40 * 40)) }
+
+        let s2 = scoreElbowAngle(extensionAngle) // 160–180 を理想採点で流用
+        return Int((Double(s1) * 0.4) + (Double(s2) * 0.6))
     }
-    
-    // 4. Elbow Angle (already calculated in TrophyPoseEvent)
-    static func normalizeElbowAngle(angle: Double) -> Int {
-        // Optimal: 160-180 degrees (extended) (100 points)
-        // 140-160: 70-100 points
-        // 120-140: 40-70 points
-        // < 120: 0-40 points
-        
-        if angle >= 160 && angle <= 180 {
-            return 100
-        } else if angle >= 140 && angle < 160 {
-            return Int(70 + (angle - 140) / 20 * 30)
-        } else if angle >= 120 && angle < 140 {
-            return Int(40 + (angle - 120) / 20 * 30)
-        } else {
-            return max(0, Int(40 * angle / 120))
-        }
+
+    // MARK: - 5) 体軸傾き（腰角/膝角の偏差平均）
+    private static func scoreBodyAxisTilt(_ deltaDeg: Double) -> Int {
+        // ideal: Δθ ≤ 5°
+        if deltaDeg <= 5 { return 100 }
+        if deltaDeg <= 10 { return lerp(from: 70, to: 100, x: (10 - deltaDeg)/5) }
+        if deltaDeg <= 20 { return lerp(from: 40, to: 70, x: (20 - deltaDeg)/10) }
+        if deltaDeg <= 35 { return lerp(from: 10, to: 40, x: (35 - deltaDeg)/15) }
+        return 0
     }
-    
-    // 5. Racket Drop (requires IMU in racket frame)
-    static func calculateRacketDrop(
+
+    // MARK: - 6) ラケット面（Yaw/Pitch）
+    private static func estimateRacketFace(
         imuHistory: [ServeSample],
-        impactTime: Int64,
-        calibration: CalibrationResult? // 仮の型
-    ) -> Double {
-        // Find samples 200ms before impact
-        let windowStart = impactTime - 200
-        let windowEnd = impactTime
-        
-        let window = imuHistory.filter {
-            $0.monotonic_ms >= windowStart && $0.monotonic_ms < windowEnd
+        impactMs: Int64,
+        calibration: CalibrationResult?
+    ) -> (yaw: Double, pitch: Double, flag: String?) {
+        // キャリブなし：Impact前後±60ms の gy を yaw、gx を pitch として微小角近似
+        guard !imuHistory.isEmpty else { return (0, 0, "no_imu_for_racket_face") }
+        if calibration == nil {
+            let winStart = impactMs - 60, winEnd = impactMs + 20
+            let win = imuHistory.filter { $0.monotonic_ms >= winStart && $0.monotonic_ms <= winEnd }
+            guard win.count >= 3 else { return (0, 0, "short_imu_window_for_racket_face") }
+            // 角速度[rad/s] が gy/gx で来ている前提 → dt 積分 → deg
+            var yawRad = 0.0, pitchRad = 0.0
+            for i in 1..<win.count {
+                let dt = Double(win[i].monotonic_ms - win[i-1].monotonic_ms) / 1000.0
+                yawRad   += win[i].gy * dt
+                pitchRad += win[i].gx * dt
+            }
+            return (yawRad * 180.0 / .pi, pitchRad * 180.0 / .pi, "approx_racket_face_no_calib")
         }
-        
-        guard !window.isEmpty else { return 0.0 }
-        
-        // Find minimum Z-axis acceleration (deepest drop)
-        // In racket frame, negative Z means drop
-        var minDrop = 0.0
-        
-        for sample in window {
-            let az = sample.az  // In sensor frame for now
-            minDrop = min(minDrop, az)
-        }
-        
-        // Convert to degrees (approximate)
-        // Assuming 1g drop ≈ 45 degrees
-        let dropDegrees = abs(minDrop) * 45.0
-        
-        return dropDegrees
+        // TODO: calibration を用いた正しい姿勢推定（Phase 2で実装）
+        return (0, 0, "racket_face_needs_calibration")
     }
-    
-    static func normalizeRacketDrop(drop: Double) -> Int {
-        // Optimal: 40-60 degrees (100 points)
-        // 30-40 or 60-80: 70-100 points
-        // 20-30 or 80-100: 40-70 points
-        // < 20 or > 100: 0-40 points
-        
-        if drop >= 40 && drop <= 60 {
-            return 100
-        } else if drop >= 30 && drop < 40 {
-            return Int(70 + (drop - 30) / 10 * 30)
-        } else if drop >= 60 && drop < 80 {
-            return Int(100 - (drop - 60) / 20 * 30)
-        } else if drop >= 20 && drop < 30 {
-            return Int(40 + (drop - 20) / 10 * 30)
-        } else if drop >= 80 && drop < 100 {
-            return Int(70 - (drop - 80) / 20 * 30)
-        } else if drop < 20 {
-            return max(0, Int(40 * drop / 20))
+
+    private static func scoreRacketFace(yaw: Double, pitch: Double) -> Int {
+        // 目安：Impact 時に yaw ≈ 0±15°, pitch ≈ 0±10° を高評価
+        let sYaw: Int
+        let ay = abs(yaw)
+        if ay <= 15 { sYaw = 100 }
+        else if ay <= 30 { sYaw = lerp(from: 70, to: 100, x: (30 - ay)/15) }
+        else if ay <= 50 { sYaw = lerp(from: 40, to: 70, x: (50 - ay)/20) }
+        else { sYaw = 20 }
+
+        let sPitch: Int
+        let ap = abs(pitch)
+        if ap <= 10 { sPitch = 100 }
+        else if ap <= 20 { sPitch = lerp(from: 70, to: 100, x: (20 - ap)/10) }
+        else if ap <= 35 { sPitch = lerp(from: 40, to: 70, x: (35 - ap)/15) }
+        else { sPitch = 20 }
+
+        return Int((Double(sYaw) + Double(sPitch)) / 2.0)
+    }
+
+    // MARK: - 7) トス前方距離[m]
+    private static func estimateTossForwardDistance(
+        tossHistory: [BallDetection],
+        poseRef: PoseData,
+        courtCalib: CourtCalibration?
+    ) -> (Double, String?) {
+        guard let apex = tossHistory.max(by: { $0.position.y < $1.position.y }) else {
+            return (0.0, "no_toss_apex")
+        }
+        if let cc = courtCalib {
+            // Phase 2: ホモグラフィで z=0 へ投影して前方距離を算出
+            // ここでは API だけ合わせ、実装は CourtCalibration 側のメソッドを想定
+            if let meters = cc.projectForwardDistanceToBaseline(pixelPoint: apex.position) {
+                return (meters, nil)
+            } else {
+                return (0.0, "court_calib_projection_failed")
+            }
         } else {
-            return max(0, Int(40 - (drop - 100) / 50 * 40))
+            // 暫定：画面座標の基準（肩中点）からの x 差を画面幅で規格化→係数0.8m換算
+            guard let ls = poseRef.joints[.leftShoulder], let rs = poseRef.joints[.rightShoulder] else {
+                return (0.0, "no_shoulders_for_toss_approx")
+            }
+            let shoulderMidX = (ls.x + rs.x) / 2.0
+            let dx = Double(apex.position.x - shoulderMidX)
+            let ratio = dx / Double(poseRef.imageSize.width) // [-1,1]程度
+            return (ratio * 0.8, "approx_toss_no_homography")
         }
     }
-    
-    // 6. Trunk Rotation Timing (correlation between racket drop and trunk rotation)
-    static func calculateTrunkRotationTiming(
+
+    private static func scoreTossForward(_ meters: Double) -> Int {
+        // 目安：0.2–0.6m 前方を高評価（スイング方向への前進）
+        let a = abs(meters)
+        if (0.2...0.6).contains(a) { return 100 }
+        if (0.1..<0.2).contains(a)  { return lerp(from: 70, to: 100, x: (a-0.1)/0.1) }
+        if (0.6..<0.8).contains(a)  { return lerp(from: 100, to: 70, x: (a-0.6)/0.2) }
+        if (0.05..<0.1).contains(a) { return lerp(from: 40, to: 70, x: (a-0.05)/0.05) }
+        if (0.8..<1.0).contains(a)  { return lerp(from: 70, to: 40, x: (a-0.8)/0.2) }
+        if a < 0.05 { return max(0, Int(40 * a / 0.05)) }
+        return max(0, Int(40 - (a - 1.0) / 0.5 * 40))
+    }
+
+    // MARK: - 8) リストワーク（回内外の合計角度）
+    private static func estimateWristRotationDeg(
         imuHistory: [ServeSample],
-        impactTime: Int64
+        startMs: Int64,
+        endMs: Int64
     ) -> Double {
-        // Window: 500ms before impact
-        let windowStart = impactTime - 500
-        let windowEnd = impactTime
-        
-        let window = imuHistory.filter {
-            $0.monotonic_ms >= windowStart && $0.monotonic_ms < windowEnd
+        // gyroscope の gz を回外/回内の主成分とみなして小窓積分（近似）
+        guard !imuHistory.isEmpty else { return 0.0 }
+        let win = imuHistory.filter { $0.monotonic_ms >= startMs && $0.monotonic_ms <= endMs }
+        guard win.count >= 3 else { return 0.0 }
+        var rad = 0.0
+        for i in 1..<win.count {
+            let dt = Double(win[i].monotonic_ms - win[i-1].monotonic_ms) / 1000.0
+            rad += abs(win[i].gz) * dt
         }
-        
-        guard window.count >= 20 else { return 0.0 }
-        
-        // Extract two signals:
-        // 1. Racket drop (Z-axis acceleration)
-        // 2. Trunk rotation (Y-axis angular velocity)
-        
-        var dropSignal = window.map { $0.az }
-        var rotationSignal = window.map { $0.gy }
-        
-        // Normalize
-        dropSignal = normalize(signal: dropSignal)
-        rotationSignal = normalize(signal: rotationSignal)
-        
-        // Cross-correlation to find phase lag
-        let correlation = calculateCrossCorrelation(signal1: dropSignal, signal2: rotationSignal)
-        
-        return correlation
+        return rad * 180.0 / .pi
     }
-    
-    private static func normalize(signal: [Double]) -> [Double] {
-        let mean = signal.reduce(0, +) / Double(signal.count)
-        let stdDev = sqrt(signal.map { pow($0 - mean, 2) }.reduce(0, +) / Double(signal.count))
-        
-        guard stdDev > 0 else { return signal }
-        
-        return signal.map { ($0 - mean) / stdDev }
+
+    private static func scoreWristwork(_ deg: Double) -> Int {
+        // 目安：総回転 120–220° が高評価（不足/過多は減点）
+        if (120...220).contains(deg) { return 100 }
+        if (90..<120).contains(deg)  { return lerp(from: 70, to: 100, x: (deg-90)/30) }
+        if (220..<280).contains(deg) { return lerp(from: 100, to: 70, x: (deg-220)/60) }
+        if (60..<90).contains(deg)   { return lerp(from: 40, to: 70, x: (deg-60)/30) }
+        if (280..<360).contains(deg) { return lerp(from: 70, to: 40, x: (deg-280)/80) }
+        if deg < 60 { return max(0, Int(40 * deg / 60)) }
+        return max(0, Int(40 - (deg - 360) / 120 * 40))
     }
-    
-    private static func calculateCrossCorrelation(signal1: [Double], signal2: [Double]) -> Double {
-        let n = min(signal1.count, signal2.count)
-        guard n > 0 else { return 0.0 }
-        
-        var sum = 0.0
-        for i in 0..<n {
-            sum += signal1[i] * signal2[i]
-        }
-        
-        return sum / Double(n)
+
+    // MARK: - Helpers
+    private static func lerp(from: Int, to: Int, x: Double) -> Int {
+        let t = max(0.0, min(1.0, x))
+        return Int(round(Double(from) + (Double(to - from) * t)))
     }
-    
-    static func normalizeTrunkTiming(correlation: Double) -> Int {
-        // Higher correlation = better timing
-        // 0.7-1.0: 100 points
-        // 0.5-0.7: 70-100 points
-        // 0.3-0.5: 40-70 points
-        // < 0.3: 0-40 points
-        
-        let absCorr = abs(correlation)
-        
-        if absCorr >= 0.7 {
-            return 100
-        } else if absCorr >= 0.5 {
-            return Int(70 + (absCorr - 0.5) / 0.2 * 30)
-        } else if absCorr >= 0.3 {
-            return Int(40 + (absCorr - 0.3) / 0.2 * 30)
-        } else {
-            return max(0, Int(40 * absCorr / 0.3))
-        }
-    }
-    
-    // 7. Toss to Impact Timing
-    static func calculateTossToImpactDelay(tossTime: Double, impactTime: Double) -> Double {
-        return impactTime - tossTime
-    }
-    
-    static func normalizeTossToImpactTiming(delay: Double) -> Int {
-        // Optimal: 0.8-1.2 seconds (100 points)
-        // 0.6-0.8 or 1.2-1.5: 70-100 points
-        // 0.4-0.6 or 1.5-2.0: 40-70 points
-        // < 0.4 or > 2.0: 0-40 points
-        
-        if delay >= 0.8 && delay <= 1.2 {
-            return 100
-        } else if delay >= 0.6 && delay < 0.8 {
-            return Int(70 + (delay - 0.6) / 0.2 * 30)
-        } else if delay >= 1.2 && delay < 1.5 {
-            return Int(100 - (delay - 1.2) / 0.3 * 30)
-        } else if delay >= 0.4 && delay < 0.6 {
-            return Int(40 + (delay - 0.4) / 0.2 * 30)
-        } else if delay >= 1.5 && delay < 2.0 {
-            return Int(70 - (delay - 1.5) / 0.5 * 30)
-        } else if delay < 0.4 {
-            return max(0, Int(40 * delay / 0.4))
-        } else {
-            return max(0, Int(40 - (delay - 2.0) / 1.0 * 40))
-        }
-    }
-    
-    // MARK: - Total Score
-    static func calculateTotalScore(scores: [Double]) -> Int {
+
+    private static func weightedTotal(_ scores: [Double], weights: [Double]) -> Double {
         guard scores.count == weights.count else { return 0 }
-        
-        var total = 0.0
-        for i in 0..<scores.count {
-            total += scores[i] * weights[i] / 100.0
-        }
-        
-        return Int(total)
+        let s = zip(scores, weights).reduce(0.0) { $0 + ($1.0 * $1.1 / 100.0) }
+        return s
     }
-    
-    // MARK: - Feedback Generation
-    static func generateFeedback(metrics: ServeMetrics) -> String {
-        // Find lowest score
-        let scores = [
-            (1, "トスの安定性", metrics.score1_tossStability),
-            (2, "肩-骨盤の傾き", metrics.score2_shoulderPelvisTilt),
-            (3, "膝の屈曲", metrics.score3_kneeFlexion),
-            (4, "肘の角度", metrics.score4_elbowAngle),
-            (5, "ラケットドロップ", metrics.score5_racketDrop),
-            (6, "体幹回旋のタイミング", metrics.score6_trunkTiming),
-            (7, "トス→インパクトのタイミング", metrics.score7_tossToImpactTiming)
-        ]
-        
-        let sorted = scores.sorted { $0.2 < $1.2 }
-        let weakest = sorted.first!
-        
-        // Generate advice based on weakest metric
-        let advice: String
-        
-        switch weakest.0 {
-        case 1:
-            advice = "トスの高さを一定に保ちましょう。同じ位置に繰り返しトスできるよう練習しましょう。"
-        case 2:
-            advice = "トロフィーポーズで上体をもっと傾けましょう。肩のラインが骨盤より傾くイメージです。"
-        case 3:
-            advice = "膝をもっと曲げましょう。下半身のパワーを活用できます。"
-        case 4:
-            advice = "トロフィーポーズで肘をもっと伸ばしましょう。腕を高く上げる意識を持ちましょう。"
-        case 5:
-            advice = "ラケットをもっと深く落としましょう。背中側により大きく引くイメージです。"
-        case 6:
-            advice = "体幹回旋のタイミングを調整しましょう。ラケットが落ちきってから回旋を開始します。"
-        case 7:
-            advice = "トスとインパクトのタイミングを調整しましょう。トスの高さを少し変えてみましょう。"
-        default:
-            advice = "良いサーブです！この調子で練習を続けましょう。"
-        }
-        
-        return advice
+}
+
+// --- Temporary stub for Phase 1 buildability ---
+import CoreGraphics
+
+extension CourtCalibration {
+    /// トス頂点の画素座標をコート平面(z=0)へ射影し、ベースラインからの前方距離[m]を返す
+    /// Phase 2で実装。本スタブは nil を返す。
+    func projectForwardDistanceToBaseline(pixelPoint: CGPoint) -> Double? {
+        return nil
     }
 }

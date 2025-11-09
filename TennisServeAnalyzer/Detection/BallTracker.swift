@@ -1,4 +1,4 @@
-//
+//なう
 //  BallTracker.swift (100% COMPLETE VERSION)
 //  TennisServeAnalyzer
 //
@@ -161,8 +161,8 @@ class BallTracker {
         )
     }
     
-    // MARK: - Prediction with Gravity
-    private func predictBallPosition(timestamp: Double) -> BallDetection? {
+    // MARK: - Prediction with Gravity (PUBLIC for intermediate frames)
+    func predictBallPosition(timestamp: Double) -> BallDetection? {
         guard let state = kalmanState else { return nil }
         
         let dt = timestamp - state.timestamp

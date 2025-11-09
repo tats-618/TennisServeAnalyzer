@@ -51,7 +51,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
     
     // Configuration
     private let maxSessionDuration: TimeInterval = 10.0
-    private let poseDetectionInterval: Int = 8  // Every 8 frames (15fps detection at 120fps)
+    private let poseDetectionInterval: Int = 6  // Every 8 frames (15fps detection at 120fps)
     
     // MARK: - Initialization
     override init() {
@@ -219,8 +219,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
         print("🔍 Setting state to analyzing")
         state = .analyzing
         
-        // 🔧 短縮: 1.0s → 0.2s
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             print("📊 Performing analysis")
             self?.performAnalysis()
         }
@@ -364,13 +363,25 @@ class VideoAnalyzer: NSObject, ObservableObject {
             
             let tossHistory = ballTracker?.getDetectionHistory() ?? []
             
+            // 明示的にローカル変数へ分けて型推論を楽にする
+            let trophyEvent: TrophyPoseEvent = trophy
+            let impactEvt: ImpactEvent = impact
+            let tossDetections: [BallDetection] = ballTracker?.getDetectionHistory() ?? []
+            let imuAll: [ServeSample] = watchIMUHistory
+            let calib: CalibrationResult? = nil
+            let courtCalib: CourtCalibration? = nil
+            let impactPose: PoseData? = nil   // 取れるなら近傍Poseを入れてOK
+
             metrics = MetricsCalculator.calculateMetrics(
-                trophyPose: trophy,
-                impactEvent: impact,
-                tossHistory: tossHistory,
-                imuHistory: watchIMUHistory,
-                calibration: nil  // TODO: キャリブレーション実装後に追加
+                trophyPose: trophyEvent,
+                impactEvent: impactEvt,
+                tossHistory: tossDetections,
+                imuHistory: imuAll,
+                calibration: calib,
+                courtCalibration: courtCalib,
+                impactPose: impactPose
             )
+
         } else {
             print("⚠️ Using partial metrics (missing events)")
             metrics = calculatePartialMetrics(avgFPS: avgFPS)
@@ -381,43 +392,76 @@ class VideoAnalyzer: NSObject, ObservableObject {
     }
     
     private func calculatePartialMetrics(avgFPS: Double) -> ServeMetrics {
-        // Use pose data but without full metrics
+        // Poseから取りやすい肘/膝だけざっくり平均、他は暫定値＋低スコア
         var kneeFlexions: [Double] = []
         var elbowAngles: [Double] = []
-        
         for pose in poseHistory {
-            if let kneeAngle = PoseDetector.calculateKneeAngle(from: pose, isRight: true) {
-                kneeFlexions.append(kneeAngle)
+            if let knee = PoseDetector.calculateKneeAngle(from: pose, isRight: true) {
+                kneeFlexions.append(knee)
             }
-            
-            if let elbowAngle = PoseDetector.calculateElbowAngle(from: pose, isRight: true) {
-                elbowAngles.append(elbowAngle)
+            if let elbow = PoseDetector.calculateElbowAngle(from: pose, isRight: true) {
+                elbowAngles.append(elbow)
             }
         }
-        
         let avgKnee = kneeFlexions.isEmpty ? 140.0 : kneeFlexions.reduce(0, +) / Double(kneeFlexions.count)
         let avgElbow = elbowAngles.isEmpty ? 165.0 : elbowAngles.reduce(0, +) / Double(elbowAngles.count)
-        
+
+        // 暫定の生値（UIが落ちないように妥当域に）
+        let elbowDeg = avgElbow
+        let armpitDeg = 90.0
+        let pelvisRise = 0.10
+        let leftTorso = 65.0
+        let leftExt   = 170.0
+        let bodyAxisD = 10.0
+        let rfYaw = 15.0
+        let rfPitch = 10.0
+        let tossM = 0.30
+        let wristDeg = 120.0
+
+        // スコアは MetricsCalculator のロジックに合わせたいが、ここは簡易に仮評価
+        let s1 = max(0, min(100, 100 - Int(abs(elbowDeg - 170) * 1.2)))
+        let s2 = max(0, min(100, 100 - Int(abs(armpitDeg - 95) * 2.0)))
+        let s3 = max(0, min(100, Int((pelvisRise / 0.25) * 100)))
+        let s4a = max(0, min(100, 100 - Int(abs(leftTorso - 65) * 2.0)))
+        let s4b = max(0, min(100, 100 - Int(abs(leftExt - 170) * 1.0)))
+        let s4 = Int((Double(s4a) * 0.4) + (Double(s4b) * 0.6))
+        let s5 = max(0, min(100, 100 - Int(max(0.0, bodyAxisD - 5.0) * 5.0)))
+        let s6y = max(0, min(100, 100 - Int(max(0.0, abs(rfYaw) - 15.0) * 3.0)))
+        let s6p = max(0, min(100, 100 - Int(max(0.0, abs(rfPitch) - 10.0) * 4.0)))
+        let s6 = (s6y + s6p) / 2
+        let s7 = max(0, min(100, 100 - Int(max(0.0, abs(tossM - 0.4)) * 300.0)))
+        let s8 = max(0, min(100, 100 - Int(max(0.0, abs(wristDeg - 170)) * 0.8)))
+
+        // 重み付け（MetricsCalculator と同じ配分）
+        let weights: [Double] = [10,10,20,10,15,10,10,15]
+        let scores = [s1,s2,s3,s4,s5,s6,s7,s8].map { Double($0) }
+        let total = zip(scores, weights).reduce(0.0) { $0 + $1.0 * $1.1 / 100.0 }
+
         return ServeMetrics(
-            tossStabilityCV: 0.08,
-            shoulderPelvisTiltDeg: 15.2,
-            kneeFlexionDeg: avgKnee,
-            elbowAngleDeg: avgElbow,
-            racketDropDeg: 54.1,
-            trunkTimingCorrelation: 0.72,
-            tossToImpactMs: 467.0,
-            score1_tossStability: 78,
-            score2_shoulderPelvisTilt: 65,
-            score3_kneeFlexion: Int(100 - min(abs(avgKnee - 140) * 2, 100)),
-            score4_elbowAngle: Int(100 - min(abs(avgElbow - 170) * 2, 100)),
-            score5_racketDrop: 80,
-            score6_trunkTiming: 58,
-            score7_tossToImpactTiming: 74,
-            totalScore: 69,
+            elbowAngleDeg: elbowDeg,
+            armpitAngleDeg: armpitDeg,
+            pelvisRiseM: pelvisRise,
+            leftArmTorsoAngleDeg: leftTorso,
+            leftArmExtensionDeg: leftExt,
+            bodyAxisDeviationDeg: bodyAxisD,
+            racketFaceYawDeg: rfYaw,
+            racketFacePitchDeg: rfPitch,
+            tossForwardDistanceM: tossM,
+            wristRotationDeg: wristDeg,
+            score1_elbowAngle: s1,
+            score2_armpitAngle: s2,
+            score3_lowerBodyContribution: s3,
+            score4_leftHandPosition: s4,
+            score5_bodyAxisTilt: s5,
+            score6_racketFaceAngle: s6,
+            score7_tossPosition: s7,
+            score8_wristwork: s8,
+            totalScore: Int(total),
             timestamp: Date(),
-            flags: ["pose_detection", "partial_metrics", "frames:\(frameCount)", "poses:\(poseHistory.count)", "fps:\(Int(avgFPS))"]
+            flags: ["partial_metrics","frames:\(frameCount)","poses:\(poseHistory.count)","fps:\(Int(avgFPS))"]
         )
     }
+
     
     // MARK: - Utility
     func reset() {

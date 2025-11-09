@@ -348,3 +348,51 @@ extension PoseData {
         return desc
     }
 }
+
+// =======================
+// v0.2 metrics helpers
+// =======================
+
+enum Side { case left, right }
+
+extension PoseDetector {
+
+    /// 脇角（上腕-体幹）: neck–shoulder–elbow の外角
+    static func armpitAngle(_ pose: PoseData, side: Side) -> Double? {
+        let shoulder: BodyJoint = (side == .right) ? .rightShoulder : .leftShoulder
+        let elbow: BodyJoint    = (side == .right) ? .rightElbow    : .leftElbow
+
+        guard let neck = pose.joints[ .neck ],
+              let sh   = pose.joints[ shoulder ],
+              let el   = pose.joints[ elbow ] else { return nil }
+
+        return calculateAngle(point1: neck, point2: sh, point3: el)
+    }
+
+    /// 左手位置（2 角度）: torsoAngle = neck–LShoulder–LElbow, extensionAngle = LShoulder–LElbow–LWrist
+    static func leftHandAngles(_ pose: PoseData) -> (torso: Double, extension: Double)? {
+        guard let neck = pose.joints[ .neck ],
+              let ls   = pose.joints[ .leftShoulder ],
+              let le   = pose.joints[ .leftElbow ],
+              let lw   = pose.joints[ .leftWrist ] else { return nil }
+
+        let torso = calculateAngle(point1: neck, point2: ls, point3: le)
+        let ext   = calculateAngle(point1: ls,   point2: le, point3: lw)
+        return (torso, ext)
+    }
+
+    /// 体軸傾き Δ（腰角/膝角の |θ-180| の平均）
+    static func bodyAxisDelta(_ pose: PoseData) -> Double? {
+        guard let rs = pose.joints[ .rightShoulder ],
+              let rh = pose.joints[ .rightHip ],
+              let rk = pose.joints[ .rightKnee ],
+              let ra = pose.joints[ .rightAnkle ] else { return nil }
+
+        // 腰角: shoulder–hip–knee / 膝角: hip–knee–ankle
+        let waist = calculateAngle(point1: rs, point2: rh, point3: rk)
+        let knee  = calculateAngle(point1: rh, point2: rk, point3: ra)
+        let d1 = abs(waist - 180.0)
+        let d2 = abs(knee  - 180.0)
+        return (d1 + d2) / 2.0
+    }
+}
