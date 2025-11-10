@@ -29,7 +29,7 @@ class YOLOBallDetector {
     private var usingFineTuned: Bool = false
 
     // Thresholds
-    private var highConfidence: Float = 0.75
+    private var highConfidence: Float = 0.80
     private var lowConfidence:  Float = 0.55
     private let confBypassColor: Float = 0.90
 

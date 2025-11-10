@@ -2,13 +2,6 @@
 //  EventDetector.swift
 //  TennisServeAnalyzer
 //
-//  Created by å³¶æœ¬å¥ç”Ÿ on 2025/10/28.
-//
-
-//
-//  EventDetector.swift
-//  TennisServeAnalyzer
-//
 //  Key event detection for tennis serve analysis
 //  - Trophy pose detection (video-driven)
 //  - Impact detection (IMU-driven)

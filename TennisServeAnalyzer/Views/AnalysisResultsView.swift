@@ -121,7 +121,7 @@ struct AnalysisResultsView: View {
                 metricRow(
                     title: "6. ラケット面の角度（インパクト）",
                     score: metrics.score6_racketFaceAngle,
-                    rawValue: String(format: "Yaw: %.1f° / Pitch: %.1f°",
+                    rawValue: String(format: "左右: %.1f° / 上下: %.1f°",
                                      metrics.racketFaceYawDeg,
                                      metrics.racketFacePitchDeg)
                 )

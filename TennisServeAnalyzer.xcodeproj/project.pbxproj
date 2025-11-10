@@ -404,6 +404,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = TennisServeAnalyzer;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "打球音解析のためマイクを使用します";
 				INFOPLIST_KEY_NSMotionUsageDescription = "This app uses motion sensors to analyze tennis serve movements";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.tatsuki.tennisserve.ios;
@@ -434,6 +435,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = TennisServeAnalyzer;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "打球音解析のためマイクを使用します";
 				INFOPLIST_KEY_NSMotionUsageDescription = "This app uses motion sensors to analyze tennis serve movements";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.tatsuki.tennisserve.ios;
