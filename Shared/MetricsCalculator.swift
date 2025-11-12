@@ -14,7 +14,7 @@ struct ServeMetrics: Codable {
     // Raw values (8 指標)
     public let elbowAngleDeg: Double                 // 1: 肘角（Trophy）
     public let armpitAngleDeg: Double               // 2: 脇角（Trophy）
-    public let pelvisRiseM: Double                  // 3: 下半身貢献度（Trophy→Impact直前20–30msの骨盤上昇）
+    public let pelvisRisePx: Double                 // 3: 下半身貢献度（Trophy前後0.5秒の骨盤上昇[px]）
     public let leftArmTorsoAngleDeg: Double         // 4a: 左手位置（体幹-左腕）
     public let leftArmExtensionDeg: Double          // 4b: 左手位置（上腕-前腕）
     public let bodyAxisDeviationDeg: Double         // 5: 体軸傾き（腰角/膝角の偏差平均, Impact）
@@ -41,7 +41,8 @@ struct ServeMetrics: Codable {
     public let flags: [String] // 不足データなどの注記
 }
 
-// MARK: - Weights (sum = 100)
+// MARK: - Weights (sum = 100) ※現在は使用していません（単純平均に変更）
+/*
 private let METRIC_WEIGHTS: [Double] = [
     10, // 1 肘
     10, // 2 脇
@@ -52,6 +53,7 @@ private let METRIC_WEIGHTS: [Double] = [
     10, // 7 トス位置
     15  // 8 リストワーク
 ]
+*/
 
 // MARK: - Calculator
 enum MetricsCalculator {
@@ -65,6 +67,7 @@ enum MetricsCalculator {
     ///   - calibration: ラケット座標系キャリブ結果（任意）
     ///   - courtCalibration: コートホモグラフィ（任意, あれば[m]へ換算）
     ///   - impactPose: 可能ならインパクト時のPose（任意, 未指定ならTrophyで代替）
+    ///   - pelvisBasePose: 骨盤測定の基準位置（最も低い位置）、任意
     static func calculateMetrics(
         trophyPose: TrophyPoseEvent,
         impactEvent: ImpactEvent,
@@ -72,7 +75,8 @@ enum MetricsCalculator {
         imuHistory: [ServeSample],
         calibration: CalibrationResult? = nil,
         courtCalibration: CourtCalibration? = nil,
-        impactPose: PoseData? = nil
+        impactPose: PoseData? = nil,
+        pelvisBasePose: PoseData? = nil
     ) -> ServeMetrics {
 
         var flags: [String] = []
@@ -90,12 +94,14 @@ enum MetricsCalculator {
             ?? PoseDetector.armpitAngle(trophyPose.pose, side: .right) ?? 0.0
         let score2 = scoreArmpitAngle(armpit)
 
-        // ========= 3) 下半身貢献度（骨盤上昇[m]）=========
-        // Trophy と Impact 付近の Pose が必要。なければフラグを立てて 0 扱い。
-        let impactPoseResolved = impactPose ?? trophyPose.pose // フォールバック（※理想は Impact）
-        var pelvisRiseM = pelvisRiseMeters(trophyPose.pose, impactPoseResolved)
+        // ========= 3) 下半身貢献度（骨盤上昇[px]）=========
+        // 最も低い位置（pelvisBasePose）から最も高い位置（impactPose）への上昇量を測定
+        let impactPoseResolved = impactPose ?? trophyPose.pose // フォールバック
+        let basePoseResolved = pelvisBasePose ?? trophyPose.pose // 基準位置（最も低い位置）
+        var pelvisRisePx = pelvisRisePixels(basePoseResolved, impactPoseResolved)
         if impactPose == nil { flags.append("no_impact_pose_for_pelvisRise") }
-        let score3 = scorePelvisRise(pelvisRiseM)
+        if pelvisBasePose == nil { flags.append("no_pelvis_base_pose") }
+        let score3 = scorePelvisRise(pelvisRisePx)
 
         // ========= 4) 左手位置（Trophy）=========
         // 🔧 修正: leftShoulderAngleとleftElbowAngle（実際の頂点角度）を優先
@@ -135,15 +141,15 @@ enum MetricsCalculator {
         )
         let score8 = scoreWristwork(wristDeg)
 
-        // ========= 合計 =========
+        // ========= 合計（8項目の単純平均）=========
         let scores = [score1, score2, score3, score4, score5, score6, score7, score8]
-        let total = weightedTotal(scores.map { Double($0) }, weights: METRIC_WEIGHTS)
+        let total = Double(scores.reduce(0, +)) / 8.0  // 単純平均
 
 
         return ServeMetrics(
             elbowAngleDeg: elbowAngle,
             armpitAngleDeg: armpit,
-            pelvisRiseM: pelvisRiseM,
+            pelvisRisePx: pelvisRisePx,
             leftArmTorsoAngleDeg: leftTorso,
             leftArmExtensionDeg: leftExt,
             bodyAxisDeviationDeg: bodyAxis,
@@ -179,103 +185,145 @@ enum MetricsCalculator {
 
     // MARK: - 1) 肘角
     private static func scoreElbowAngle(_ angle: Double) -> Int {
-        // 🔧 修正: 360°範囲を0°～180°に正規化
+        // 🔧 設計書準拠: 360°範囲を0°～180°に正規化
         let normalizedAngle = normalizeAngle(angle)
         
-        // 🔧 修正: 基準値 90–110°
-        switch normalizedAngle {
-        case 90...110: return 100
-        case 80..<90: return lerp(from: 70, to: 100, x: (normalizedAngle-80)/10)
-        case 110..<120: return lerp(from: 100, to: 70, x: (normalizedAngle-110)/10)
-        case 60..<80: return lerp(from: 40, to: 70, x: (normalizedAngle-60)/20)
-        case 120..<140: return lerp(from: 70, to: 40, x: (normalizedAngle-120)/20)
-        case ..<60:    return max(0, Int(40 * normalizedAngle / 60))
-        default:        return max(0, Int(40 - (normalizedAngle - 140) / 40 * 40))
+        // 設計書基準:
+        // - 理想範囲 90°~110° → 100点
+        // - 曲がりすぎ 0°~89.9° → 100×(θ/90)
+        // - 伸ばしすぎ 110.1°~180° → 100×((180−θ)/70)
+        
+        if (90...110).contains(normalizedAngle) {
+            return 100
+        } else if normalizedAngle < 90 {
+            // 曲がりすぎ
+            return Int(100.0 * normalizedAngle / 90.0)
+        } else {
+            // 伸ばしすぎ (110.1° ~ 180°)
+            return Int(100.0 * (180.0 - normalizedAngle) / 70.0)
         }
     }
 
     // MARK: - 2) 脇角（上腕-体幹の外角）
     private static func scoreArmpitAngle(_ angle: Double) -> Int {
-        // 🔧 修正: 360°対応 - 基準値 170–190°
-        // 360°スケールではそのまま使用（正規化しない）
+        // 🔧 設計書準拠: 360°対応 - 基準値 170–190°
+        // 設計書基準:
+        // - 理想範囲 170°~190° → 100点
+        // - 下がりすぎ 90°~169.9° → 100×((θ−90)/80)
+        // - 上がりすぎ 190.1°~270° → 100×((270−θ)/80)
         
-        if (170...190).contains(angle) { return 100 }
-        if (160..<170).contains(angle) { return lerp(from: 70, to: 100, x: (angle-160)/10) }
-        if (190..<200).contains(angle) { return lerp(from: 100, to: 70, x: (angle-190)/10) }
-        if (140..<160).contains(angle) { return lerp(from: 40, to: 70, x: (angle-140)/20) }
-        if (200..<220).contains(angle) { return lerp(from: 70, to: 40, x: (angle-200)/20) }
-        if angle < 140 { return max(0, Int(40 * angle / 140)) }
-        return max(0, Int(40 - (angle - 220)/50 * 40))
+        if (170...190).contains(angle) {
+            return 100
+        } else if (90..<170).contains(angle) {
+            // 下がりすぎ
+            return Int(100.0 * (angle - 90.0) / 80.0)
+        } else if (190..<270).contains(angle) {
+            // 上がりすぎ
+            return Int(100.0 * (270.0 - angle) / 80.0)
+        } else {
+            // 範囲外 (90°未満または270°以上)
+            return 0
+        }
     }
 
     // MARK: - 3) 下半身貢献度（骨盤上昇）
-    private static func pelvisRiseMeters(_ trophy: PoseData, _ impact: PoseData) -> Double {
-        // 右/左 Hip の中点のY差を画素→相対→mへ換算
+    private static func pelvisRisePixels(_ trophy: PoseData, _ impact: PoseData) -> Double {
+        // 右/左 Hip の中点のY差をピクセルで返す
         guard let rH = trophy.joints[.rightHip], let lH = trophy.joints[.leftHip],
-              let rA = trophy.joints[.rightAnkle], let lA = trophy.joints[.leftAnkle],
               let rH2 = impact.joints[.rightHip], let lH2 = impact.joints[.leftHip] else {
             return 0.0
         }
         let hipMid1 = CGPoint(x: (rH.x + lH.x)/2, y: (rH.y + lH.y)/2)
         let hipMid2 = CGPoint(x: (rH2.x + lH2.x)/2, y: (rH2.y + lH2.y)/2)
 
-        // 画素→身長スケーリング：股関節-足首距離を 0.53H とみなして相対尺度化
-        let pixLeg = (hypot(rH.x-rA.x, rH.y-rA.y) + hypot(lH.x-lA.x, lH.y-lA.y)) / 2.0
-        guard pixLeg > 0 else { return 0.0 }
+        // ピクセル上昇量（画面座標で y 減少 = 上昇）
+        let pixRise = max(0.0, hipMid1.y - hipMid2.y)
+        return Double(pixRise)
+    }
+    
+    // 🔧 追加: 骨盤座標とピクセル移動量を含む詳細情報を返す関数
+    static func pelvisRiseDetails(_ trophy: PoseData, _ impact: PoseData) -> (pixels: Double, hipTrophy: CGPoint?, hipImpact: CGPoint?)? {
+        guard let rH = trophy.joints[.rightHip], let lH = trophy.joints[.leftHip],
+              let rH2 = impact.joints[.rightHip], let lH2 = impact.joints[.leftHip] else {
+            return nil
+        }
+        
+        let hipMid1 = CGPoint(x: (rH.x + lH.x)/2, y: (rH.y + lH.y)/2)
+        let hipMid2 = CGPoint(x: (rH2.x + lH2.x)/2, y: (rH2.y + lH2.y)/2)
 
-        let pixRise = max(0.0, hipMid1.y - hipMid2.y) // 上昇は画面座標で y 減少
-        let riseToLeg = Double(pixRise / pixLeg)      // 下肢長比
-        // 成人平均下肢長 ≈ 0.9m（概算）→ m換算（キャリブなしの一時実装）
-        return riseToLeg * 0.9
+        let pixRise = max(0.0, hipMid1.y - hipMid2.y)
+        
+        return (pixels: Double(pixRise), hipTrophy: hipMid1, hipImpact: hipMid2)
     }
 
-    private static func scorePelvisRise(_ meters: Double) -> Int {
-        // 設計：0.12–0.25m で高評価
-        if (0.12...0.25).contains(meters) { return 100 }
-        if (0.08..<0.12).contains(meters) { return lerp(from: 70, to: 100, x: (meters-0.08)/0.04) }
-        if (0.25..<0.32).contains(meters) { return lerp(from: 100, to: 70, x: (meters-0.25)/0.07) }
-        if (0.04..<0.08).contains(meters) { return lerp(from: 40, to: 70, x: (meters-0.04)/0.04) }
-        if (0.32..<0.40).contains(meters) { return lerp(from: 70, to: 40, x: (meters-0.32)/0.08) }
-        if meters < 0.04 { return max(0, Int(40 * meters / 0.04)) }
-        return max(0, Int(40 - (meters - 0.40)/0.20 * 40))
+    private static func scorePelvisRise(_ pixels: Double) -> Int {
+        // 🔧 設計書準拠: ピクセルベースの基準値
+        // - 理想範囲 60~70 px → 100点
+        // - 不足 0~59.9 px → (100×ΔY)/60
+        
+        if (60...70).contains(pixels) {
+            return 100
+        } else if pixels < 60 {
+            // 不足（膝が使えていない）
+            return Int(100.0 * pixels / 60.0)
+        } else {
+            // 70pxを超える場合も100点とする
+            return 100
+        }
     }
 
     // MARK: - 4) 左手位置（体幹-左腕 & 上腕-前腕の2角度の合成）
     private static func scoreLeftHandPosition(torsoAngle: Double, extensionAngle: Double) -> Int {
-        // 🔧 修正: 左肩（torsoAngle）は360°対応、左肘（extensionAngle）は180°のまま
-        // torsoAngle: 360°スケール、正規化しない
-        // extensionAngle: 180°スケール、正規化する
+        // 🔧 設計書準拠: 左肩（torsoAngle）は360°対応、左肘（extensionAngle）は180°のまま
         let normalizedExtension = normalizeAngle(extensionAngle)
         
-        // 🔧 修正: torsoAngle（左肩）基準値 90–110°（真上） - 360°対応
+        // 設計書基準 - 左肩（torsoAngle）: 90°~120° → 50点
+        // - 低すぎ 0°~89.9° → 50×((90-θ)/90)
+        // - 後ろに曲げすぎ 120.1°~270° → 50×((270−θ)/150)
         let s1: Int
-        if (90...110).contains(torsoAngle) { s1 = 100 }
-        else if (80..<90).contains(torsoAngle) { s1 = lerp(from: 70, to: 100, x: (torsoAngle-80)/10) }
-        else if (110..<120).contains(torsoAngle) { s1 = lerp(from: 100, to: 70, x: (torsoAngle-110)/10) }
-        else if (60..<80).contains(torsoAngle) { s1 = lerp(from: 40, to: 70, x: (torsoAngle-60)/20) }
-        else if (120..<140).contains(torsoAngle) { s1 = lerp(from: 70, to: 40, x: (torsoAngle-120)/20) }
-        else if torsoAngle < 60 { s1 = max(0, Int(40 * torsoAngle / 60)) }
-        else { s1 = max(0, Int(40 - (torsoAngle - 140)/130 * 40)) }
+        if (90...120).contains(torsoAngle) {
+            s1 = 50
+        } else if torsoAngle < 90 {
+            // 低すぎ
+            s1 = Int(50.0 * (90.0 - torsoAngle) / 90.0)
+        } else if torsoAngle <= 270 {
+            // 後ろに曲げすぎ
+            s1 = Int(50.0 * (270.0 - torsoAngle) / 150.0)
+        } else {
+            s1 = 0
+        }
 
-        // 🔧 修正: extensionAngle（左肘）基準値 170–180°（伸展）
+        // 設計書基準 - 左肘（extensionAngle）: 170°~180° → 50点
+        // - 曲がりすぎ 0°~169.9° → 50×(θ/170)
         let s2: Int
-        if (170...180).contains(normalizedExtension) { s2 = 100 }
-        else if (160..<170).contains(normalizedExtension) { s2 = lerp(from: 70, to: 100, x: (normalizedExtension-160)/10) }
-        else if (150..<160).contains(normalizedExtension) { s2 = lerp(from: 40, to: 70, x: (normalizedExtension-150)/10) }
-        else if normalizedExtension < 150 { s2 = max(0, Int(40 * normalizedExtension / 150)) }
-        else { s2 = max(0, Int(40 - (normalizedExtension - 180) / 20 * 40)) }
+        if (170...180).contains(normalizedExtension) {
+            s2 = 50
+        } else if normalizedExtension < 170 {
+            // 曲がりすぎ
+            s2 = Int(50.0 * normalizedExtension / 170.0)
+        } else {
+            // 180°を超える場合（正規化後はありえないが）
+            s2 = 50
+        }
         
-        return Int((Double(s1) * 0.5) + (Double(s2) * 0.5))
+        // 最終スコア = 左肩スコア + 左肘スコア
+        return s1 + s2
     }
 
     // MARK: - 5) 体軸傾き（腰角/膝角の偏差平均）
     private static func scoreBodyAxisTilt(_ deltaDeg: Double) -> Int {
-        // ideal: Δθ ≤ 5°
-        if deltaDeg <= 5 { return 100 }
-        if deltaDeg <= 10 { return lerp(from: 70, to: 100, x: (10 - deltaDeg)/5) }
-        if deltaDeg <= 20 { return lerp(from: 40, to: 70, x: (20 - deltaDeg)/10) }
-        if deltaDeg <= 35 { return lerp(from: 10, to: 40, x: (35 - deltaDeg)/15) }
-        return 0
+        // 🔧 設計書準拠:
+        // - 理想範囲 Δθ ≤ 5° → 100点
+        // - 折れが大きい 5° < Δθ ≤ 60° : 100×((60−Δθ)/55)
+        // - 最低レベル 60° < Δθ : 0点
+        
+        if deltaDeg <= 5 {
+            return 100
+        } else if deltaDeg <= 60 {
+            return Int(100.0 * (60.0 - deltaDeg) / 55.0)
+        } else {
+            return 0
+        }
     }
 
     // MARK: - 6) ラケット面（Yaw/Pitch）
@@ -304,22 +352,38 @@ enum MetricsCalculator {
     }
 
     private static func scoreRacketFace(yaw: Double, pitch: Double) -> Int {
-        // 目安：Impact 時に yaw ≈ 0±15°, pitch ≈ 0±10° を高評価
+        // 🔧 設計書準拠: ロール（yaw相当）とピッチ
+        
+        // ロール（yaw）の評価
+        // - 理想範囲 -5°~+5° → 50点
+        // - 左/右に傾きすぎ -60°~-5.1° または +5.1°~+60° : 50×((60−|r|)/55)
+        // - 最低レベル |r|>60° : 0点
         let sYaw: Int
-        let ay = abs(yaw)
-        if ay <= 15 { sYaw = 100 }
-        else if ay <= 30 { sYaw = lerp(from: 70, to: 100, x: (30 - ay)/15) }
-        else if ay <= 50 { sYaw = lerp(from: 40, to: 70, x: (50 - ay)/20) }
-        else { sYaw = 20 }
+        let absYaw = abs(yaw)
+        if absYaw <= 5 {
+            sYaw = 50
+        } else if absYaw <= 60 {
+            sYaw = Int(50.0 * (60.0 - absYaw) / 55.0)
+        } else {
+            sYaw = 0
+        }
 
+        // ピッチの評価
+        // - 理想範囲 -10°~+10° → 50点
+        // - 下/上向きすぎ -60°~-10.1° または +10.1°~+60° : 50×((50−|p|)/50)
+        // - 最低レベル |p|>60° : 0点
         let sPitch: Int
-        let ap = abs(pitch)
-        if ap <= 10 { sPitch = 100 }
-        else if ap <= 20 { sPitch = lerp(from: 70, to: 100, x: (20 - ap)/10) }
-        else if ap <= 35 { sPitch = lerp(from: 40, to: 70, x: (35 - ap)/15) }
-        else { sPitch = 20 }
+        let absPitch = abs(pitch)
+        if absPitch <= 10 {
+            sPitch = 50
+        } else if absPitch <= 60 {
+            sPitch = Int(50.0 * (50.0 - (absPitch - 10.0)) / 50.0)
+        } else {
+            sPitch = 0
+        }
 
-        return Int((Double(sYaw) + Double(sPitch)) / 2.0)
+        // 最終スコア = ロールスコア + ピッチスコア
+        return sYaw + sPitch
     }
 
     // MARK: - 7) トス前方距離[m]
@@ -398,11 +462,14 @@ enum MetricsCalculator {
         return Int(round(Double(from) + (Double(to - from) * t)))
     }
 
+    /*
+    // ※現在は使用していません（単純平均に変更）
     private static func weightedTotal(_ scores: [Double], weights: [Double]) -> Double {
         guard scores.count == weights.count else { return 0 }
         let s = zip(scores, weights).reduce(0.0) { $0 + ($1.0 * $1.1 / 100.0) }
         return s
     }
+    */
 }
 
 // --- Temporary stub for Phase 1 buildability ---

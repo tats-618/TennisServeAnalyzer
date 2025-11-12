@@ -13,6 +13,7 @@ struct PoseOverlayView: View {
     let viewSize: CGSize
     let trophyPoseDetected: Bool
     let trophyAngles: TrophyPoseAngles?  // トロフィーポーズ時の角度
+    let pelvisPosition: CGPoint?  // 🔧 追加: 骨盤座標
     
     // Configuration
     private let jointRadius: CGFloat = 8
@@ -129,6 +130,14 @@ struct PoseOverlayView: View {
                         isHighlighted: isTrophyPose
                     )
                 }
+                
+                // 🔧 追加: 骨盤座標の表示
+                if let pelvis = pelvisPosition {
+                    pelvisRow(
+                        position: pelvis,
+                        isHighlighted: isTrophyPose
+                    )
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -140,6 +149,31 @@ struct PoseOverlayView: View {
         .padding(.leading, 16)
         .padding(.top, 120)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    
+    // 🔧 追加: 骨盤座標の表示行
+    private func pelvisRow(position: CGPoint, isHighlighted: Bool) -> some View {
+        HStack(spacing: 8) {
+            // ラベル
+            Text("骨盤")
+                .font(.caption)
+                .fontWeight(isHighlighted ? .semibold : .regular)
+                .foregroundColor(.white)
+                .frame(width: 40, alignment: .leading)
+            
+            // 座標値
+            Text("(\(Int(position.x)), \(Int(position.y)))")
+                .font(.caption)
+                .fontWeight(isHighlighted ? .bold : .semibold)
+                .foregroundColor(.purple)
+                .frame(minWidth: 50, alignment: .trailing)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.white.opacity(isHighlighted ? 0.15 : 0.08))
+        )
     }
     
     // フィードバックメッセージセクション（🔧 新規追加）
@@ -324,7 +358,8 @@ struct TrophyPoseAngles {
             rightArmpitAngle: 95.0,
             leftElbowAngle: 170.0,
             leftShoulderAngle: 65.0
-        )
+        ),
+        pelvisPosition: CGPoint(x: 187, y: 400)  // 🔧 追加: プレビュー用の骨盤座標
     )
     .background(Color.black)
 }

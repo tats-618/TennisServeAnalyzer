@@ -190,7 +190,7 @@ class DataExporter {
                 "\(s.totalScore)",
                 String(format: "%.1f", s.elbowAngleDeg),
                 String(format: "%.1f", s.armpitAngleDeg),
-                String(format: "%.3f", s.pelvisRiseM),
+                String(format: "%.3f", s.pelvisRisePx),
                 String(format: "%.1f", s.leftArmTorsoAngleDeg),
                 String(format: "%.1f", s.leftArmExtensionDeg),
                 String(format: "%.1f", s.bodyAxisDeviationDeg),

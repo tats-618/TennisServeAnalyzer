@@ -29,6 +29,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
     @Published var detectedBall: BallDetection? = nil
     @Published var trophyPoseDetected: Bool = false
     @Published var trophyAngles: TrophyPoseAngles? = nil
+    @Published var pelvisPosition: CGPoint? = nil  // 🔧 追加: 骨盤座標
     
     // Watch connectivity
     private var watchManager: WatchConnectivityManager?
@@ -47,11 +48,12 @@ class VideoAnalyzer: NSObject, ObservableObject {
     private var trophyPoseEvent: TrophyPoseEvent?
     private var sessionStartTime: Date?
     
-    // 🔧 修正: 時系列データ保存（ボール座標をCGPointに）
+    // 🔧 修正: 時系列データ保存（ボール座標 + 骨盤座標）
     private struct FrameData {
         let timestamp: Double
         let angles: TrophyPoseAngles
-        let ballPosition: CGPoint?  // 🔧 修正: ballYからballPositionに変更
+        let ballPosition: CGPoint?
+        let pelvisPosition: CGPoint?  // 🔧 追加: 骨盤中心座標
     }
     private var frameDataHistory: [FrameData] = []
     
@@ -228,6 +230,14 @@ class VideoAnalyzer: NSObject, ObservableObject {
                         let leftElbow = PoseDetector.calculateElbowAngle(from: pose, isRight: false)
                         let leftShoulder = PoseDetector.leftHandAngles(pose)?.torso
                         
+                        // 🔧 追加: 骨盤中心座標を計算
+                        let pelvisPosition: CGPoint?
+                        if let rHip = pose.joints[.rightHip], let lHip = pose.joints[.leftHip] {
+                            pelvisPosition = CGPoint(x: (rHip.x + lHip.x) / 2, y: (rHip.y + lHip.y) / 2)
+                        } else {
+                            pelvisPosition = nil
+                        }
+                        
                         let angles = TrophyPoseAngles(
                             rightElbowAngle: rightElbow,
                             rightArmpitAngle: rightArmpit,
@@ -238,22 +248,24 @@ class VideoAnalyzer: NSObject, ObservableObject {
                         // UI更新
                         DispatchQueue.main.async { [weak self] in
                             self?.trophyAngles = angles
+                            self?.pelvisPosition = pelvisPosition  // 🔧 追加: 骨盤座標を更新
                         }
                         
                         // データを保存
                         frameDataHistory.append(FrameData(
                             timestamp: timestamp,
                             angles: angles,
-                            ballPosition: currentBallPosition  // 🔧 修正: CGPointで保存
+                            ballPosition: currentBallPosition,
+                            pelvisPosition: pelvisPosition  // 🔧 追加: 骨盤座標を保存
                         ))
                         
-                        // 🔧 修正: 骨格検出時に毎回ログ出力（x, y座標を表示）
+                        // 🔧 修正: 骨格検出時に毎回ログ出力（骨盤座標を追加）
                         let rightElbowStr = rightElbow.map { String(format: "%.1f", $0) } ?? "---"
                         let rightArmpitStr = rightArmpit.map { String(format: "%.1f", $0) } ?? "---"
                         let leftShoulderStr = leftShoulder.map { String(format: "%.1f", $0) } ?? "---"
                         let leftElbowStr = leftElbow.map { String(format: "%.1f", $0) } ?? "---"
                         
-                        // 🔧 修正: x座標とy座標の両方を表示
+                        // ボール位置
                         let ballPosStr: String
                         if let pos = currentBallPosition {
                             ballPosStr = String(format: "x=%.0f, y=%.0f", pos.x, pos.y)
@@ -261,7 +273,15 @@ class VideoAnalyzer: NSObject, ObservableObject {
                             ballPosStr = "x=---, y=---"
                         }
                         
-                        print("t=\(String(format: "%.2f", timestamp))s, 右肘:\(rightElbowStr)°, 右脇:\(rightArmpitStr)°, 左肩:\(leftShoulderStr)°, 左肘:\(leftElbowStr)°, ボール位置:(\(ballPosStr))")
+                        // 🔧 追加: 骨盤位置
+                        let pelvisPosStr: String
+                        if let pos = pelvisPosition {
+                            pelvisPosStr = String(format: "x=%.0f, y=%.0f", pos.x, pos.y)
+                        } else {
+                            pelvisPosStr = "x=---, y=---"
+                        }
+                        
+                        print("t=\(String(format: "%.2f", timestamp))s, 右肘:\(rightElbowStr)°, 右脇:\(rightArmpitStr)°, 左肩:\(leftShoulderStr)°, 左肘:\(leftElbowStr)°, ボール:(\(ballPosStr)), 骨盤:(\(pelvisPosStr))")
                     }
                 }
             }
@@ -313,8 +333,17 @@ class VideoAnalyzer: NSObject, ObservableObject {
                 // 🔧 修正: x座標とy座標の両方を表示
                 let ballPosStr = String(format: "x=%.0f, y=%.0f", apexData.ballPosition!.x, apexData.ballPosition!.y)
                 
+                // 🔧 追加: 骨盤座標の表示
+                let pelvisPosStr: String
+                if let pos = apexData.pelvisPosition {
+                    pelvisPosStr = String(format: "x=%.0f, y=%.0f", pos.x, pos.y)
+                } else {
+                    pelvisPosStr = "x=---, y=---"
+                }
+                
                 print("🏆 トロフィーポーズ（ボール頂点）:")
-                print("   t=\(String(format: "%.2f", apexData.timestamp))s, 右肘:\(rightElbowStr)°, 右脇:\(rightArmpitStr)°, 左肩:\(leftShoulderStr)°, 左肘:\(leftElbowStr)°, ボール位置:(\(ballPosStr))")
+                print("   t=\(String(format: "%.2f", apexData.timestamp))s, 右肘:\(rightElbowStr)°, 右脇:\(rightArmpitStr)°, 左肩:\(leftShoulderStr)°, 左肘:\(leftElbowStr)°")
+                print("   ボール位置:(\(ballPosStr)), 骨盤位置:(\(pelvisPosStr))")
                 
                 // トロフィーポーズイベントを頂点の実際の角度で作成
                 if let nearestPose = poseHistory.min(by: { abs($0.timestamp - apexData.timestamp) < abs($1.timestamp - apexData.timestamp) }) {
@@ -349,6 +378,75 @@ class VideoAnalyzer: NSObject, ObservableObject {
             let impact = impactEvent ?? createDummyImpactEvent()
             let tossHistory = ballTracker?.getDetectionHistory() ?? []
             
+            // 🔧 修正: トロフィーポーズの1秒前から4秒後の範囲で骨盤上昇量を測定
+            let trophyTime = trophy.timestamp
+            let windowBefore = 1.0  // トロフィーの1秒前
+            let windowAfter = 4.0   // トロフィーの4秒後
+            
+            // トロフィーポーズの1秒前から4秒後の範囲のポーズをフィルタリング
+            let windowPoses = poseHistory.filter { pose in
+                let timeDiff = pose.timestamp - trophyTime
+                return timeDiff >= -windowBefore && timeDiff <= windowAfter
+            }
+            
+            // 骨盤が最も低い位置（Y座標が最大）と最も高い位置（Y座標が最小）を検出
+            var lowestPose: PoseData?
+            var highestPose: PoseData?
+            var lowestY: CGFloat = 0
+            var highestY: CGFloat = CGFloat.greatestFiniteMagnitude
+            
+            if !windowPoses.isEmpty {
+                for pose in windowPoses {
+                    guard let rH = pose.joints[.rightHip], let lH = pose.joints[.leftHip] else {
+                        continue
+                    }
+                    let hipY = (rH.y + lH.y) / 2.0
+                    
+                    // 最も低い位置（Y座標が最大）
+                    if hipY > lowestY {
+                        lowestY = hipY
+                        lowestPose = pose
+                    }
+                    
+                    // 最も高い位置（Y座標が最小）
+                    if hipY < highestY {
+                        highestY = hipY
+                        highestPose = pose
+                    }
+                }
+            }
+            
+            // トロフィーポーズを基準点、最も高い位置をimpactPoseとして使用
+            let impactPose: PoseData?
+            let pelvisBasePose: PoseData?
+            
+            if let lowest = lowestPose, let highest = highestPose {
+                // 最も低い位置を基準、最も高い位置との差を計算
+                pelvisBasePose = lowest
+                impactPose = highest
+                print("📊 骨盤測定: 最低位置 y=\(String(format: "%.0f", lowestY)) → 最高位置 y=\(String(format: "%.0f", highestY))")
+            } else {
+                pelvisBasePose = nil
+                impactPose = poseHistory.last
+                print("⚠️ 測定範囲内にポーズが見つかりませんでした。最後のポーズを使用します。")
+            }
+            
+            // 🔧 追加: 骨盤上昇量の詳細情報を出力
+            if let base = pelvisBasePose, let impact = impactPose {
+                if let details = MetricsCalculator.pelvisRiseDetails(base, impact) {
+                    print("\n📊 下半身貢献度（骨盤上昇量）:")
+                    print("   測定範囲: トロフィーの\(windowBefore)秒前から\(windowAfter)秒後（計\(windowBefore + windowAfter)秒）")
+                    if let hipTrophy = details.hipTrophy, let hipImpact = details.hipImpact {
+                        print("   最低位置 骨盤座標: (x=\(String(format: "%.0f", hipTrophy.x)), y=\(String(format: "%.0f", hipTrophy.y)))")
+                        print("   最高位置 骨盤座標: (x=\(String(format: "%.0f", hipImpact.x)), y=\(String(format: "%.0f", hipImpact.y)))")
+                        print("   骨盤上昇量（ピクセル）: \(String(format: "%.1f", details.pixels)) px")
+                        print("   ※理想範囲: 60~70 px")
+                    }
+                } else {
+                    print("⚠️ 骨盤座標の取得に失敗しました")
+                }
+            }
+            
             metrics = MetricsCalculator.calculateMetrics(
                 trophyPose: trophy,
                 impactEvent: impact,
@@ -356,7 +454,8 @@ class VideoAnalyzer: NSObject, ObservableObject {
                 imuHistory: watchIMUHistory,
                 calibration: nil,
                 courtCalibration: nil,
-                impactPose: nil
+                impactPose: impactPose,
+                pelvisBasePose: pelvisBasePose
             )
         } else {
             let duration = sessionStartTime.map { -$0.timeIntervalSinceNow } ?? maxSessionDuration
@@ -392,7 +491,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
             leftExt = 170.0
         }
         
-        let pelvisRise = 0.10
+        let pelvisRise = 30.0  // ダミー値（ピクセル）
         let bodyAxisD = 10.0
         let rfYaw = 15.0
         let rfPitch = 10.0
@@ -401,7 +500,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
 
         let s1 = max(0, min(100, 100 - Int(abs(elbowDeg - 170) * 1.2)))
         let s2 = max(0, min(100, 100 - Int(abs(armpitDeg - 95) * 2.0)))
-        let s3 = max(0, min(100, Int((pelvisRise / 0.25) * 100)))
+        let s3 = max(0, min(100, Int((pelvisRise / 60.0) * 100)))  // 60pxを基準
         let s4a = max(0, min(100, 100 - Int(abs(leftTorso - 65) * 2.0)))
         let s4b = max(0, min(100, 100 - Int(abs(leftExt - 170) * 1.0)))
         let s4 = Int((Double(s4a) * 0.4) + (Double(s4b) * 0.6))
@@ -412,14 +511,14 @@ class VideoAnalyzer: NSObject, ObservableObject {
         let s7 = max(0, min(100, 100 - Int(max(0.0, abs(tossM - 0.4)) * 300.0)))
         let s8 = max(0, min(100, 100 - Int(max(0.0, abs(wristDeg - 170)) * 0.8)))
 
-        let weights: [Double] = [10,10,20,10,15,10,10,15]
-        let scores = [s1,s2,s3,s4,s5,s6,s7,s8].map { Double($0) }
-        let total = zip(scores, weights).reduce(0.0) { $0 + $1.0 * $1.1 / 100.0 }
+        // 総合スコア（8項目の単純平均）
+        let scores = [s1, s2, s3, s4, s5, s6, s7, s8]
+        let total = Double(scores.reduce(0, +)) / 8.0
 
         return ServeMetrics(
             elbowAngleDeg: elbowDeg,
             armpitAngleDeg: armpitDeg,
-            pelvisRiseM: pelvisRise,
+            pelvisRisePx: pelvisRise,
             leftArmTorsoAngleDeg: leftTorso,
             leftArmExtensionDeg: leftExt,
             bodyAxisDeviationDeg: bodyAxisD,
@@ -469,6 +568,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
         detectedBall = nil
         trophyPoseDetected = false
         trophyAngles = nil
+        pelvisPosition = nil  // 🔧 追加: 骨盤座標をクリア
         frameDataHistory.removeAll()
         ballTracker = nil
     }

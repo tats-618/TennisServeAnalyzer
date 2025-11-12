@@ -97,7 +97,8 @@ struct ContentView: View {
                         pose: pose,
                         viewSize: geometry.size,
                         trophyPoseDetected: videoAnalyzer.trophyPoseDetected,
-                        trophyAngles: videoAnalyzer.trophyAngles  // ⬅️ 追加
+                        trophyAngles: videoAnalyzer.trophyAngles,
+                        pelvisPosition: videoAnalyzer.pelvisPosition
                     )
                 }
                 

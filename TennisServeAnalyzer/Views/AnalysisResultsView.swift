@@ -101,7 +101,7 @@ struct AnalysisResultsView: View {
                 metricRow(
                     title: "3. 下半身の貢献度（骨盤上昇）",
                     score: metrics.score3_lowerBodyContribution,
-                    rawValue: String(format: "%.2fm", metrics.pelvisRiseM)
+                    rawValue: String(format: "%.0fpx", metrics.pelvisRisePx)
                 )
                 
                 metricRow(
@@ -288,8 +288,10 @@ struct AnalysisResultsView: View {
             return "素晴らしい！"
         } else if score >= 60 {
             return "良いフォームです"
-        } else {
+        } else if score >= 40 {
             return "改善の余地があります"
+        } else {
+            return "努力が必要です"
         }
     }
     
@@ -313,7 +315,7 @@ struct AnalysisResultsView: View {
             ),
             (
                 title: "下半身の貢献度",
-                message: "膝をためて骨盤を持ち上げる動作を強調。リズムよく伸展しましょう。",
+                message: "膝を深く曲げて骨盤を60~70px上昇させましょう。リズムよく伸展して下半身のパワーを活かしましょう。",
                 score: metrics.score3_lowerBodyContribution
             ),
             (
@@ -353,7 +355,7 @@ struct AnalysisResultsView: View {
     let sample = ServeMetrics(
         elbowAngleDeg: 168.5,
         armpitAngleDeg: 92.0,
-        pelvisRiseM: 0.18,
+        pelvisRisePx: 65.0,
         leftArmTorsoAngleDeg: 65.0,
         leftArmExtensionDeg: 170.0,
         bodyAxisDeviationDeg: 6.2,
@@ -373,10 +375,10 @@ struct AnalysisResultsView: View {
         timestamp: Date(),
         flags: []
     )
-    return AnalysisResultsView(
+    
+    AnalysisResultsView(
         metrics: sample,
         onRetry: { print("Retry") },
         onFinish: { print("Finish") }
     )
 }
-
