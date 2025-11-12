@@ -78,12 +78,16 @@ enum MetricsCalculator {
         var flags: [String] = []
 
         // ========= 1) 肘角（Trophy） =========
-        let elbowAngle = trophyPose.elbowAngle
+        // 🔧 修正: rightElbowAngle（実際の頂点角度）を優先
+        let elbowAngle = trophyPose.rightElbowAngle
+            ?? trophyPose.elbowAngle
             ?? PoseDetector.calculateElbowAngle(from: trophyPose.pose, isRight: true) ?? 0.0
         let score1 = scoreElbowAngle(elbowAngle)
 
         // ========= 2) 脇角（Trophy） =========
-        let armpit = PoseDetector.armpitAngle(trophyPose.pose, side: .right) ?? 0.0
+        // 🔧 修正: rightArmpitAngle（実際の頂点角度）を優先
+        let armpit = trophyPose.rightArmpitAngle
+            ?? PoseDetector.armpitAngle(trophyPose.pose, side: .right) ?? 0.0
         let score2 = scoreArmpitAngle(armpit)
 
         // ========= 3) 下半身貢献度（骨盤上昇[m]）=========
@@ -94,8 +98,11 @@ enum MetricsCalculator {
         let score3 = scorePelvisRise(pelvisRiseM)
 
         // ========= 4) 左手位置（Trophy）=========
-        let (leftTorso, leftExt) = PoseDetector.leftHandAngles(trophyPose.pose)
-            ?? (Double.nan, Double.nan)
+        // 🔧 修正: leftShoulderAngleとleftElbowAngle（実際の頂点角度）を優先
+        let leftTorso = trophyPose.leftShoulderAngle
+            ?? PoseDetector.leftHandAngles(trophyPose.pose)?.torso ?? Double.nan
+        let leftExt = trophyPose.leftElbowAngle
+            ?? PoseDetector.calculateElbowAngle(from: trophyPose.pose, isRight: false) ?? Double.nan
         let score4 = scoreLeftHandPosition(torsoAngle: leftTorso, extensionAngle: leftExt)
 
         // ========= 5) 体軸傾き（Impact 時理想, なければ Trophy）=========
@@ -158,28 +165,47 @@ enum MetricsCalculator {
         )
     }
 
+    // MARK: - Angle Normalization (360° support)
+    /// 360°範囲の角度を0°～180°に正規化
+    /// - 0°～180°: そのまま
+    /// - 180°～360°: 360° - angle（反対方向として解釈）
+    private static func normalizeAngle(_ angle: Double) -> Double {
+        if angle <= 180.0 {
+            return angle
+        } else {
+            return 360.0 - angle
+        }
+    }
+
     // MARK: - 1) 肘角
     private static func scoreElbowAngle(_ angle: Double) -> Int {
-        // Ideal: 160–180°, 140–160/段階, 120–140/段階, <120 減点
-        switch angle {
-        case 160...180: return 100
-        case 140..<160: return lerp(from: 70, to: 100, x: (angle-140)/20)
-        case 120..<140: return lerp(from: 40, to: 70, x: (angle-120)/20)
-        case ..<120:    return max(0, Int(40 * angle / 120))
-        default:        return 0
+        // 🔧 修正: 360°範囲を0°～180°に正規化
+        let normalizedAngle = normalizeAngle(angle)
+        
+        // 🔧 修正: 基準値 90–110°
+        switch normalizedAngle {
+        case 90...110: return 100
+        case 80..<90: return lerp(from: 70, to: 100, x: (normalizedAngle-80)/10)
+        case 110..<120: return lerp(from: 100, to: 70, x: (normalizedAngle-110)/10)
+        case 60..<80: return lerp(from: 40, to: 70, x: (normalizedAngle-60)/20)
+        case 120..<140: return lerp(from: 70, to: 40, x: (normalizedAngle-120)/20)
+        case ..<60:    return max(0, Int(40 * normalizedAngle / 60))
+        default:        return max(0, Int(40 - (normalizedAngle - 140) / 40 * 40))
         }
     }
 
     // MARK: - 2) 脇角（上腕-体幹の外角）
     private static func scoreArmpitAngle(_ angle: Double) -> Int {
-        // Ideal帯は 80–110°（胸郭を開きつつ詰め過ぎない）
-        if (80...110).contains(angle) { return 100 }
-        if (60..<80).contains(angle)  { return lerp(from: 70, to: 100, x: (angle-60)/20) }
-        if (110..<130).contains(angle){ return lerp(from: 100, to: 70, x: (angle-110)/20) }
-        if (45..<60).contains(angle)  { return lerp(from: 40, to: 70, x: (angle-45)/15) }
-        if (130..<150).contains(angle){ return lerp(from: 70, to: 40, x: (angle-130)/20) }
-        if angle < 45 { return max(0, Int(40 * angle / 45)) }
-        return max(0, Int(40 - (angle - 150)/30 * 40))
+        // 🔧 修正: 360°対応 - 基準値 170–190°
+        // 360°スケールではそのまま使用（正規化しない）
+        
+        if (170...190).contains(angle) { return 100 }
+        if (160..<170).contains(angle) { return lerp(from: 70, to: 100, x: (angle-160)/10) }
+        if (190..<200).contains(angle) { return lerp(from: 100, to: 70, x: (angle-190)/10) }
+        if (140..<160).contains(angle) { return lerp(from: 40, to: 70, x: (angle-140)/20) }
+        if (200..<220).contains(angle) { return lerp(from: 70, to: 40, x: (angle-200)/20) }
+        if angle < 140 { return max(0, Int(40 * angle / 140)) }
+        return max(0, Int(40 - (angle - 220)/50 * 40))
     }
 
     // MARK: - 3) 下半身貢献度（骨盤上昇）
@@ -216,19 +242,30 @@ enum MetricsCalculator {
 
     // MARK: - 4) 左手位置（体幹-左腕 & 上腕-前腕の2角度の合成）
     private static func scoreLeftHandPosition(torsoAngle: Double, extensionAngle: Double) -> Int {
-        // torsoAngle（肩頂: neck–leftShoulder–leftElbow） ideal 50–80°
-        // extensionAngle（肘: leftShoulder–leftElbow–leftWrist） ideal 160–180°
+        // 🔧 修正: 左肩（torsoAngle）は360°対応、左肘（extensionAngle）は180°のまま
+        // torsoAngle: 360°スケール、正規化しない
+        // extensionAngle: 180°スケール、正規化する
+        let normalizedExtension = normalizeAngle(extensionAngle)
+        
+        // 🔧 修正: torsoAngle（左肩）基準値 90–110°（真上） - 360°対応
         let s1: Int
-        if (50...80).contains(torsoAngle) { s1 = 100 }
-        else if (35..<50).contains(torsoAngle) { s1 = lerp(from: 70, to: 100, x: (torsoAngle-35)/15) }
-        else if (80..<95).contains(torsoAngle) { s1 = lerp(from: 100, to: 70, x: (torsoAngle-80)/15) }
-        else if (25..<35).contains(torsoAngle) { s1 = lerp(from: 40, to: 70, x: (torsoAngle-25)/10) }
-        else if (95..<110).contains(torsoAngle) { s1 = lerp(from: 70, to: 40, x: (torsoAngle-95)/15) }
-        else if torsoAngle < 25 { s1 = max(0, Int(40 * torsoAngle / 25)) }
-        else { s1 = max(0, Int(40 - (torsoAngle - 110)/40 * 40)) }
+        if (90...110).contains(torsoAngle) { s1 = 100 }
+        else if (80..<90).contains(torsoAngle) { s1 = lerp(from: 70, to: 100, x: (torsoAngle-80)/10) }
+        else if (110..<120).contains(torsoAngle) { s1 = lerp(from: 100, to: 70, x: (torsoAngle-110)/10) }
+        else if (60..<80).contains(torsoAngle) { s1 = lerp(from: 40, to: 70, x: (torsoAngle-60)/20) }
+        else if (120..<140).contains(torsoAngle) { s1 = lerp(from: 70, to: 40, x: (torsoAngle-120)/20) }
+        else if torsoAngle < 60 { s1 = max(0, Int(40 * torsoAngle / 60)) }
+        else { s1 = max(0, Int(40 - (torsoAngle - 140)/130 * 40)) }
 
-        let s2 = scoreElbowAngle(extensionAngle) // 160–180 を理想採点で流用
-        return Int((Double(s1) * 0.4) + (Double(s2) * 0.6))
+        // 🔧 修正: extensionAngle（左肘）基準値 170–180°（伸展）
+        let s2: Int
+        if (170...180).contains(normalizedExtension) { s2 = 100 }
+        else if (160..<170).contains(normalizedExtension) { s2 = lerp(from: 70, to: 100, x: (normalizedExtension-160)/10) }
+        else if (150..<160).contains(normalizedExtension) { s2 = lerp(from: 40, to: 70, x: (normalizedExtension-150)/10) }
+        else if normalizedExtension < 150 { s2 = max(0, Int(40 * normalizedExtension / 150)) }
+        else { s2 = max(0, Int(40 - (normalizedExtension - 180) / 20 * 40)) }
+        
+        return Int((Double(s1) * 0.5) + (Double(s2) * 0.5))
     }
 
     // MARK: - 5) 体軸傾き（腰角/膝角の偏差平均）

@@ -2,13 +2,6 @@
 //  PoseDetector.swift
 //  TennisServeAnalyzer
 //
-//  Created by å³¶æœ¬å¥ç”Ÿ on 2025/10/28.
-//
-
-//
-//  PoseDetector.swift
-//  TennisServeAnalyzer
-//
 //  Human body pose detection using Vision framework
 //  - VNDetectHumanBodyPoseRequest
 //  - Coordinate transformation (Vision normalized -> Screen)
@@ -270,6 +263,34 @@ extension PoseDetector {
         return angleRadians * 180.0 / .pi
     }
     
+    // 🔧 新規追加: 360°角度計算（右脇と左肩用）
+    static func calculateAngle360(
+        point1: CGPoint,
+        point2: CGPoint,
+        point3: CGPoint
+    ) -> Double {
+        // Vectors from point2 to point1 and point3
+        let vector1 = CGPoint(x: point1.x - point2.x, y: point1.y - point2.y)
+        let vector2 = CGPoint(x: point3.x - point2.x, y: point3.y - point2.y)
+        
+        // Calculate dot product and cross product
+        let dotProduct = vector1.x * vector2.x + vector1.y * vector2.y
+        let crossProduct = vector1.x * vector2.y - vector1.y * vector2.x
+        
+        // Calculate angle using atan2 (returns -π to π)
+        let angleRadians = atan2(crossProduct, dotProduct)
+        
+        // Convert to degrees and normalize to 0-360°
+        var angleDegrees = angleRadians * 180.0 / .pi
+        
+        // Normalize to 0-360°
+        if angleDegrees < 0 {
+            angleDegrees += 360.0
+        }
+        
+        return angleDegrees
+    }
+    
     /// Calculate elbow angle (right or left)
     static func calculateElbowAngle(from pose: PoseData, isRight: Bool) -> Double? {
         let shoulder: BodyJoint = isRight ? .rightShoulder : .leftShoulder
@@ -366,7 +387,12 @@ extension PoseDetector {
               let sh   = pose.joints[ shoulder ],
               let el   = pose.joints[ elbow ] else { return nil }
 
-        return calculateAngle(point1: neck, point2: sh, point3: el)
+        // 🔧 修正: 右脇のみ360°対応
+        if side == .right {
+            return calculateAngle360(point1: neck, point2: sh, point3: el)
+        } else {
+            return calculateAngle(point1: neck, point2: sh, point3: el)
+        }
     }
 
     /// 左手位置（2 角度）: torsoAngle = neck–LShoulder–LElbow, extensionAngle = LShoulder–LElbow–LWrist
@@ -376,7 +402,8 @@ extension PoseDetector {
               let le   = pose.joints[ .leftElbow ],
               let lw   = pose.joints[ .leftWrist ] else { return nil }
 
-        let torso = calculateAngle(point1: neck, point2: ls, point3: le)
+        // 🔧 修正: 左肩角度を360°対応
+        let torso = calculateAngle360(point1: neck, point2: ls, point3: le)
         let ext   = calculateAngle(point1: ls,   point2: le, point3: lw)
         return (torso, ext)
     }

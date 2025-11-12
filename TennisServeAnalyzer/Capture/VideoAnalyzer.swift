@@ -3,6 +3,7 @@
 //  TennisServeAnalyzer
 //
 //  Video analysis with Pose Detection + IMU Integration
+//  🔧 修正: 簡潔なログ、頂点判定トロフィーポーズ、ボールx座標追加
 //
 
 import Foundation
@@ -27,6 +28,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
     @Published var detectedPose: PoseData? = nil
     @Published var detectedBall: BallDetection? = nil
     @Published var trophyPoseDetected: Bool = false
+    @Published var trophyAngles: TrophyPoseAngles? = nil
     
     // Watch connectivity
     private var watchManager: WatchConnectivityManager?
@@ -45,18 +47,25 @@ class VideoAnalyzer: NSObject, ObservableObject {
     private var trophyPoseEvent: TrophyPoseEvent?
     private var sessionStartTime: Date?
     
+    // 🔧 修正: 時系列データ保存（ボール座標をCGPointに）
+    private struct FrameData {
+        let timestamp: Double
+        let angles: TrophyPoseAngles
+        let ballPosition: CGPoint?  // 🔧 修正: ballYからballPositionに変更
+    }
+    private var frameDataHistory: [FrameData] = []
+    
     // Watch IMU
     private var watchIMUHistory: [ServeSample] = []
     private var impactEvent: ImpactEvent?
     
     // Configuration
-    private let maxSessionDuration: TimeInterval = 10.0
-    private let poseDetectionInterval: Int = 6  // Every 8 frames (15fps detection at 120fps)
+    private let maxSessionDuration: TimeInterval = 15.0
+    private let poseDetectionInterval: Int = 2  // 2フレームごと (30回/秒)
     
     // MARK: - Initialization
     override init() {
         super.init()
-        print("📱 VideoAnalyzer init (with pose detection)")
         
         // Setup Watch connectivity
         setupWatchConnectivity()
@@ -64,8 +73,6 @@ class VideoAnalyzer: NSObject, ObservableObject {
     
     // MARK: - Watch Connectivity Setup
     private func setupWatchConnectivity() {
-        print("📡 Setting up Watch connectivity...")
-        
         watchManager = WatchConnectivityManager.shared
         
         // Monitor connection status
@@ -85,8 +92,6 @@ class VideoAnalyzer: NSObject, ObservableObject {
         watchManager?.onBatchDataReceived = { [weak self] samples in
             self?.handleWatchBatchData(samples)
         }
-        
-        print("✅ Watch connectivity setup complete")
     }
     
     // MARK: - Watch Data Handlers
@@ -95,66 +100,45 @@ class VideoAnalyzer: NSObject, ObservableObject {
     }
     
     private func handleWatchBatchData(_ samples: [ServeSample]) {
-        print("📦 Processing Watch batch: \(samples.count) samples")
-        
         for sample in samples {
             addIMUSample(sample)
         }
-        
-        // 🔧 NEW: Try to detect impact after receiving batch
         detectImpactFromIMU()
     }
     
     // MARK: - Lazy Initialization
     private func getOrCreatePoseDetector() -> PoseDetector? {
         if poseDetector == nil {
-            print("🏃 Initializing PoseDetector...")
             poseDetector = PoseDetector()
-            print("✅ PoseDetector initialized")
         }
         return poseDetector
     }
     
     private func getOrCreateEventDetector() -> EventDetector? {
         if eventDetector == nil {
-            print("🎯 Initializing EventDetector...")
             eventDetector = EventDetector()
-            print("✅ EventDetector initialized")
         }
         return eventDetector
     }
     
     private func getOrCreateBallTracker() -> BallTracker? {
         if ballTracker == nil {
-            print("🎾 Initializing BallTracker (YOLO)...")
             ballTracker = BallTracker()
-            print("✅ BallTracker initialized")
         }
         return ballTracker
     }
     
     // MARK: - Main Flow
     func startSession() {
-        print("🎬 startSession called")
-        
-        guard case .idle = state else {
-            print("⚠️ Not idle, current state: \(state)")
-            return
-        }
-        
-        print("📹 Requesting camera permission...")
+        guard case .idle = state else { return }
         
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-            print("🔐 Permission result: \(granted)")
-            
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 
                 if granted {
-                    print("✅ Permission granted, starting recording")
                     self.startRecording()
                 } else {
-                    print("❌ Permission denied")
                     self.state = .error("カメラ権限が必要です")
                 }
             }
@@ -162,15 +146,11 @@ class VideoAnalyzer: NSObject, ObservableObject {
     }
     
     private func startRecording() {
-        print("🎥 startRecording called")
-        
         // Initialize video capture if needed
         if videoCaptureManager == nil {
-            print("📹 Creating VideoCaptureManager...")
             let manager = VideoCaptureManager()
             manager.delegate = self
             videoCaptureManager = manager
-            print("✅ VideoCaptureManager created")
         }
         
         // Reset
@@ -181,46 +161,33 @@ class VideoAnalyzer: NSObject, ObservableObject {
         impactEvent = nil
         sessionStartTime = Date()
         trophyPoseDetected = false
+        trophyAngles = nil
+        frameDataHistory.removeAll()
         
         // Start Watch recording
-        print("⌚ Starting Watch recording...")
         watchManager?.startWatchRecording()
         
         // Start
-        print("▶️ Setting state to recording")
         state = .recording
-        
-        print("▶️ Starting capture")
         videoCaptureManager?.startRecording()
         
-        print("✅ Recording started")
+        print("=== 測定開始 ===")
         
         // Auto-stop
         DispatchQueue.main.asyncAfter(deadline: .now() + maxSessionDuration) { [weak self] in
-            print("⏱ Auto-stop triggered")
             self?.stopRecording()
         }
     }
     
     func stopRecording() {
-        print("⏹ stopRecording called")
+        guard case .recording = state else { return }
         
-        guard case .recording = state else {
-            print("⚠️ Not recording, state: \(state)")
-            return
-        }
-        
-        // Stop Watch recording
-        print("⌚ Stopping Watch recording...")
         watchManager?.stopWatchRecording()
-        
         videoCaptureManager?.stopRecording()
         
-        print("🔍 Setting state to analyzing")
         state = .analyzing
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            print("📊 Performing analysis")
             self?.performAnalysis()
         }
     }
@@ -230,6 +197,18 @@ class VideoAnalyzer: NSObject, ObservableObject {
         guard case .recording = state else { return }
         
         frameCount += 1
+        
+        var currentBallPosition: CGPoint? = nil  // 🔧 修正: CGPointに変更
+        
+        // Ball detection (毎フレーム)
+        if let tracker = getOrCreateBallTracker() {
+            if let ball = tracker.trackBall(from: sampleBuffer, timestamp: timestamp) {
+                DispatchQueue.main.async { [weak self] in
+                    self?.detectedBall = ball
+                }
+                currentBallPosition = ball.position  // 🔧 修正: 座標全体を保存
+            }
+        }
         
         // Pose detection (every N frames)
         if frameCount % poseDetectionInterval == 0 {
@@ -243,77 +222,56 @@ class VideoAnalyzer: NSObject, ObservableObject {
                     if pose.isValid {
                         poseHistory.append(pose)
                         
-                        // Check for trophy pose
-                        if trophyPoseEvent == nil {
-                            if let eventDet = getOrCreateEventDetector(),
-                               let trophy = eventDet.detectTrophyPose(pose: pose, ballApex: nil) {
-                                trophyPoseEvent = trophy
-                                print("✅ Trophy pose detected at t=\(String(format: "%.3f", trophy.timestamp))s")
-                                
-                                DispatchQueue.main.async { [weak self] in
-                                    self?.trophyPoseDetected = true
-                                }
-                            }
-                        } else {
-                            DispatchQueue.main.async { [weak self] in
-                                self?.trophyPoseDetected = true
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Ball detection
-        if let tracker = getOrCreateBallTracker() {
-            if let ball = tracker.trackBall(from: sampleBuffer, timestamp: timestamp) {
-                DispatchQueue.main.async { [weak self] in
-                    self?.detectedBall = ball
-                }
-                
-                // Check for toss apex
-                if let apex = tracker.detectTossApex() {
-                    print("🎾 Toss apex detected at \(String(format: "%.3f", apex.timestamp))s")
-                    
-                    // Update trophy pose with apex info
-                    if trophyPoseEvent == nil, let eventDet = getOrCreateEventDetector() {
-                        let nearbyPoses = poseHistory.filter { pose in
-                            abs(pose.timestamp - apex.timestamp) < 0.1
+                        // 角度を計算
+                        let rightElbow = PoseDetector.calculateElbowAngle(from: pose, isRight: true)
+                        let rightArmpit = PoseDetector.armpitAngle(pose, side: .right)
+                        let leftElbow = PoseDetector.calculateElbowAngle(from: pose, isRight: false)
+                        let leftShoulder = PoseDetector.leftHandAngles(pose)?.torso
+                        
+                        let angles = TrophyPoseAngles(
+                            rightElbowAngle: rightElbow,
+                            rightArmpitAngle: rightArmpit,
+                            leftElbowAngle: leftElbow,
+                            leftShoulderAngle: leftShoulder
+                        )
+                        
+                        // UI更新
+                        DispatchQueue.main.async { [weak self] in
+                            self?.trophyAngles = angles
                         }
                         
-                        if let nearestPose = nearbyPoses.min(by: { abs($0.timestamp - apex.timestamp) < abs($1.timestamp - apex.timestamp) }) {
-                            if let trophy = eventDet.detectTrophyPose(
-                                pose: nearestPose,
-                                ballApex: (time: apex.timestamp, height: apex.height)
-                            ) {
-                                trophyPoseEvent = trophy
-                                print("✅ Trophy pose detected with apex at t=\(String(format: "%.3f", trophy.timestamp))s")
-                                
-                                DispatchQueue.main.async { [weak self] in
-                                    self?.trophyPoseDetected = true
-                                }
-                            }
+                        // データを保存
+                        frameDataHistory.append(FrameData(
+                            timestamp: timestamp,
+                            angles: angles,
+                            ballPosition: currentBallPosition  // 🔧 修正: CGPointで保存
+                        ))
+                        
+                        // 🔧 修正: 骨格検出時に毎回ログ出力（x, y座標を表示）
+                        let rightElbowStr = rightElbow.map { String(format: "%.1f", $0) } ?? "---"
+                        let rightArmpitStr = rightArmpit.map { String(format: "%.1f", $0) } ?? "---"
+                        let leftShoulderStr = leftShoulder.map { String(format: "%.1f", $0) } ?? "---"
+                        let leftElbowStr = leftElbow.map { String(format: "%.1f", $0) } ?? "---"
+                        
+                        // 🔧 修正: x座標とy座標の両方を表示
+                        let ballPosStr: String
+                        if let pos = currentBallPosition {
+                            ballPosStr = String(format: "x=%.0f, y=%.0f", pos.x, pos.y)
+                        } else {
+                            ballPosStr = "x=---, y=---"
                         }
+                        
+                        print("t=\(String(format: "%.2f", timestamp))s, 右肘:\(rightElbowStr)°, 右脇:\(rightArmpitStr)°, 左肩:\(leftShoulderStr)°, 左肘:\(leftElbowStr)°, ボール位置:(\(ballPosStr))")
                     }
                 }
             }
         }
         
-        // Log every second
-        if frameCount % 120 == 0 {
-            print("📸 Frame: \(frameCount), Poses: \(poseHistory.count)")
-            
-            if let tracker = ballTracker {
-                let perf = tracker.getPerformanceInfo()
-                print("🎾 Ball detection: \(String(format: "%.1f", perf.fps)) fps (avg: \(String(format: "%.1f", perf.avgMs))ms)")
-            }
-        }
-        
-        // 🔧 NEW: Check for impact periodically
+        // Impact検出
         detectImpactFromIMU()
     }
     
-    // MARK: - 🔧 NEW: Impact Detection from IMU
+    // MARK: - Impact Detection from IMU
     private func detectImpactFromIMU() {
         guard impactEvent == nil else { return }
         guard watchIMUHistory.count >= 50 else { return }
@@ -323,11 +281,6 @@ class VideoAnalyzer: NSObject, ObservableObject {
             
             if let impact = eventDet.detectImpact(in: recentIMU) {
                 impactEvent = impact
-                print("💥 Impact detected!")
-                print("   - Time: \(String(format: "%.3f", impact.timestamp))s")
-                print("   - Peak ω: \(String(format: "%.1f", impact.peakAngularVelocity)) rad/s")
-                print("   - Peak jerk: \(String(format: "%.1f", impact.peakJerk)) m/s³")
-                print("   - Confidence: \(Int(impact.confidence * 100))%")
                 
                 // Stop recording shortly after impact
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -339,86 +292,113 @@ class VideoAnalyzer: NSObject, ObservableObject {
     
     // MARK: - Analysis
     private func performAnalysis() {
-        print("🔍 Performing analysis...")
-        print("   - Total frames: \(frameCount)")
-        print("   - Pose frames: \(poseHistory.count)")
-        print("   - IMU samples: \(watchIMUHistory.count)")
-        print("   - Trophy pose: \(trophyPoseEvent != nil ? "✓" : "✗")")
-        print("   - Impact: \(impactEvent != nil ? "✓" : "✗")")
-        
-        let duration = sessionStartTime.map { -$0.timeIntervalSinceNow } ?? maxSessionDuration
-        let avgFPS = Double(frameCount) / duration
+        print("\n=== 測定終了 ===")
         
         guard poseHistory.count >= 3 else {
-            print("❌ Not enough pose data")
             state = .error("骨格データが不足しています")
             return
         }
         
-        // 🔧 NEW: Calculate metrics using MetricsCalculator if we have all data
+        // 🔧 ボールの頂点（y座標最小）でトロフィーポーズを判定
+        let ballDataWithAngles = frameDataHistory.filter { $0.ballPosition != nil }
+        
+        if !ballDataWithAngles.isEmpty {
+            // y座標が最小（画面上部）= ボール頂点
+            if let apexData = ballDataWithAngles.min(by: { $0.ballPosition!.y < $1.ballPosition!.y }) {
+                let rightElbowStr = apexData.angles.rightElbowAngle.map { String(format: "%.1f", $0) } ?? "---"
+                let rightArmpitStr = apexData.angles.rightArmpitAngle.map { String(format: "%.1f", $0) } ?? "---"
+                let leftShoulderStr = apexData.angles.leftShoulderAngle.map { String(format: "%.1f", $0) } ?? "---"
+                let leftElbowStr = apexData.angles.leftElbowAngle.map { String(format: "%.1f", $0) } ?? "---"
+                
+                // 🔧 修正: x座標とy座標の両方を表示
+                let ballPosStr = String(format: "x=%.0f, y=%.0f", apexData.ballPosition!.x, apexData.ballPosition!.y)
+                
+                print("🏆 トロフィーポーズ（ボール頂点）:")
+                print("   t=\(String(format: "%.2f", apexData.timestamp))s, 右肘:\(rightElbowStr)°, 右脇:\(rightArmpitStr)°, 左肩:\(leftShoulderStr)°, 左肘:\(leftElbowStr)°, ボール位置:(\(ballPosStr))")
+                
+                // トロフィーポーズイベントを頂点の実際の角度で作成
+                if let nearestPose = poseHistory.min(by: { abs($0.timestamp - apexData.timestamp) < abs($1.timestamp - apexData.timestamp) }) {
+                    trophyPoseEvent = TrophyPoseEvent(
+                        timestamp: apexData.timestamp,
+                        pose: nearestPose,
+                        tossApex: (time: apexData.timestamp, height: apexData.ballPosition!.y),
+                        confidence: 1.0,
+                        elbowAngle: apexData.angles.rightElbowAngle,
+                        shoulderAbduction: nil as Double?,
+                        isValid: true,
+                        rightElbowAngle: apexData.angles.rightElbowAngle,
+                        rightArmpitAngle: apexData.angles.rightArmpitAngle,
+                        leftShoulderAngle: apexData.angles.leftShoulderAngle,
+                        leftElbowAngle: apexData.angles.leftElbowAngle
+                    )
+                }
+                
+                DispatchQueue.main.async { [weak self] in
+                    self?.trophyPoseDetected = true
+                    self?.trophyAngles = apexData.angles
+                }
+            }
+        } else {
+            print("⚠️ ボールデータが不足しているため、トロフィーポーズを特定できませんでした")
+        }
+        
+        // メトリクス計算
         let metrics: ServeMetrics
         
-        if let trophy = trophyPoseEvent, let impact = impactEvent {
-            print("✅ Calculating full metrics with MetricsCalculator")
-            
+        if let trophy = trophyPoseEvent {
+            let impact = impactEvent ?? createDummyImpactEvent()
             let tossHistory = ballTracker?.getDetectionHistory() ?? []
             
-            // 明示的にローカル変数へ分けて型推論を楽にする
-            let trophyEvent: TrophyPoseEvent = trophy
-            let impactEvt: ImpactEvent = impact
-            let tossDetections: [BallDetection] = ballTracker?.getDetectionHistory() ?? []
-            let imuAll: [ServeSample] = watchIMUHistory
-            let calib: CalibrationResult? = nil
-            let courtCalib: CourtCalibration? = nil
-            let impactPose: PoseData? = nil   // 取れるなら近傍Poseを入れてOK
-
             metrics = MetricsCalculator.calculateMetrics(
-                trophyPose: trophyEvent,
-                impactEvent: impactEvt,
-                tossHistory: tossDetections,
-                imuHistory: imuAll,
-                calibration: calib,
-                courtCalibration: courtCalib,
-                impactPose: impactPose
+                trophyPose: trophy,
+                impactEvent: impact,
+                tossHistory: tossHistory,
+                imuHistory: watchIMUHistory,
+                calibration: nil,
+                courtCalibration: nil,
+                impactPose: nil
             )
-
         } else {
-            print("⚠️ Using partial metrics (missing events)")
+            let duration = sessionStartTime.map { -$0.timeIntervalSinceNow } ?? maxSessionDuration
+            let avgFPS = Double(frameCount) / duration
             metrics = calculatePartialMetrics(avgFPS: avgFPS)
         }
         
-        print("✅ Analysis complete - Score: \(metrics.totalScore)/100")
+        print("✅ 解析完了 - スコア: \(metrics.totalScore)/100\n")
         state = .completed(metrics)
     }
     
     private func calculatePartialMetrics(avgFPS: Double) -> ServeMetrics {
-        // Poseから取りやすい肘/膝だけざっくり平均、他は暫定値＋低スコア
-        var kneeFlexions: [Double] = []
-        var elbowAngles: [Double] = []
-        for pose in poseHistory {
-            if let knee = PoseDetector.calculateKneeAngle(from: pose, isRight: true) {
-                kneeFlexions.append(knee)
+        let elbowDeg: Double
+        let armpitDeg: Double
+        let leftTorso: Double
+        let leftExt: Double
+        
+        if let trophy = trophyPoseEvent {
+            elbowDeg = trophy.rightElbowAngle ?? 165.0
+            armpitDeg = trophy.rightArmpitAngle ?? 90.0
+            leftTorso = trophy.leftShoulderAngle ?? 65.0
+            leftExt = trophy.leftElbowAngle ?? 170.0
+        } else {
+            var elbowAngles: [Double] = []
+            for pose in poseHistory {
+                if let elbow = PoseDetector.calculateElbowAngle(from: pose, isRight: true) {
+                    elbowAngles.append(elbow)
+                }
             }
-            if let elbow = PoseDetector.calculateElbowAngle(from: pose, isRight: true) {
-                elbowAngles.append(elbow)
-            }
+            elbowDeg = elbowAngles.isEmpty ? 165.0 : elbowAngles.reduce(0, +) / Double(elbowAngles.count)
+            armpitDeg = 90.0
+            leftTorso = 65.0
+            leftExt = 170.0
         }
-        let avgKnee = kneeFlexions.isEmpty ? 140.0 : kneeFlexions.reduce(0, +) / Double(kneeFlexions.count)
-        let avgElbow = elbowAngles.isEmpty ? 165.0 : elbowAngles.reduce(0, +) / Double(elbowAngles.count)
-
-        // 暫定の生値（UIが落ちないように妥当域に）
-        let elbowDeg = avgElbow
-        let armpitDeg = 90.0
+        
         let pelvisRise = 0.10
-        let leftTorso = 65.0
-        let leftExt   = 170.0
         let bodyAxisD = 10.0
         let rfYaw = 15.0
         let rfPitch = 10.0
         let tossM = 0.30
         let wristDeg = 120.0
 
-        // スコアは MetricsCalculator のロジックに合わせたいが、ここは簡易に仮評価
         let s1 = max(0, min(100, 100 - Int(abs(elbowDeg - 170) * 1.2)))
         let s2 = max(0, min(100, 100 - Int(abs(armpitDeg - 95) * 2.0)))
         let s3 = max(0, min(100, Int((pelvisRise / 0.25) * 100)))
@@ -432,7 +412,6 @@ class VideoAnalyzer: NSObject, ObservableObject {
         let s7 = max(0, min(100, 100 - Int(max(0.0, abs(tossM - 0.4)) * 300.0)))
         let s8 = max(0, min(100, 100 - Int(max(0.0, abs(wristDeg - 170)) * 0.8)))
 
-        // 重み付け（MetricsCalculator と同じ配分）
         let weights: [Double] = [10,10,20,10,15,10,10,15]
         let scores = [s1,s2,s3,s4,s5,s6,s7,s8].map { Double($0) }
         let total = zip(scores, weights).reduce(0.0) { $0 + $1.0 * $1.1 / 100.0 }
@@ -463,9 +442,21 @@ class VideoAnalyzer: NSObject, ObservableObject {
     }
 
     
+    // MARK: - Dummy Impact Event
+    private func createDummyImpactEvent() -> ImpactEvent {
+        let dummyTimestamp = (trophyPoseEvent?.timestamp ?? 0) + 0.5
+        return ImpactEvent(
+            timestamp: dummyTimestamp,
+            monotonicMs: Int64(dummyTimestamp * 1000),
+            peakAngularVelocity: 0.0,
+            peakJerk: 0.0,
+            spectralPower: 0.0,
+            confidence: 0.0
+        )
+    }
+    
     // MARK: - Utility
     func reset() {
-        print("🔄 Reset called")
         videoCaptureManager?.stopRecording()
         state = .idle
         frameCount = 0
@@ -477,22 +468,19 @@ class VideoAnalyzer: NSObject, ObservableObject {
         detectedPose = nil
         detectedBall = nil
         trophyPoseDetected = false
+        trophyAngles = nil
+        frameDataHistory.removeAll()
         ballTracker = nil
     }
     
     func getPreviewLayer() -> AVCaptureVideoPreviewLayer? {
-        print("🖼 getPreviewLayer called")
-        
         if videoCaptureManager == nil {
-            print("📹 Creating VideoCaptureManager for preview")
             let manager = VideoCaptureManager()
             manager.delegate = self
             videoCaptureManager = manager
         }
         
-        let layer = videoCaptureManager?.createPreviewLayer()
-        print(layer != nil ? "✅ Preview layer created" : "❌ No preview layer")
-        return layer
+        return videoCaptureManager?.createPreviewLayer()
     }
     
     func getCurrentMetrics() -> ServeMetrics? {
@@ -505,12 +493,10 @@ class VideoAnalyzer: NSObject, ObservableObject {
     func addIMUSample(_ sample: ServeSample) {
         watchIMUHistory.append(sample)
         
-        // 🔧 NEW: Pass to EventDetector
         if let eventDet = getOrCreateEventDetector() {
             eventDet.addIMUSample(sample)
         }
         
-        // Keep bounded
         let maxHistory = 2000
         if watchIMUHistory.count > maxHistory {
             watchIMUHistory.removeFirst(watchIMUHistory.count - maxHistory)
@@ -532,17 +518,14 @@ extension VideoAnalyzer: VideoCaptureDelegate {
     }
     
     func videoCaptureDidFail(error: Error) {
-        print("❌ Capture failed: \(error.localizedDescription)")
         DispatchQueue.main.async { [weak self] in
             self?.state = .error(error.localizedDescription)
         }
     }
     
     func videoCaptureDidStart() {
-        print("✅ Capture started")
     }
     
     func videoCaptureDidStop() {
-        print("✅ Capture stopped")
     }
 }

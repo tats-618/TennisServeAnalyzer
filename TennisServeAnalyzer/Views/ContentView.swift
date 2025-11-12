@@ -91,12 +91,13 @@ struct ContentView: View {
                 CameraPreviewView(videoAnalyzer: videoAnalyzer)
                     .edgesIgnoringSafeArea(.all)
                 
-                // Pose overlay
+                // Pose overlay with trophy angles (修正: trophyAnglesパラメータを追加)
                 if let pose = videoAnalyzer.detectedPose {
                     PoseOverlayView(
                         pose: pose,
                         viewSize: geometry.size,
-                        trophyPoseDetected: videoAnalyzer.trophyPoseDetected
+                        trophyPoseDetected: videoAnalyzer.trophyPoseDetected,
+                        trophyAngles: videoAnalyzer.trophyAngles  // ⬅️ 追加
                     )
                 }
                 

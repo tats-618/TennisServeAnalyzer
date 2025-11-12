@@ -2,7 +2,7 @@
 //  PoseOverlayView.swift
 //  TennisServeAnalyzer
 //
-//  Real-time skeleton visualization overlay
+//  Real-time skeleton visualization overlay with trophy pose angles
 //
 
 import SwiftUI
@@ -12,6 +12,7 @@ struct PoseOverlayView: View {
     let pose: PoseData?
     let viewSize: CGSize
     let trophyPoseDetected: Bool
+    let trophyAngles: TrophyPoseAngles?  // トロフィーポーズ時の角度
     
     // Configuration
     private let jointRadius: CGFloat = 8
@@ -33,10 +34,144 @@ struct PoseOverlayView: View {
                     
                     // Confidence indicator
                     confidenceIndicator(pose: pose)
+                    
+                    // 🔧 修正: 角度は常に表示（トロフィーポーズ時は強調）
+                    if let angles = trophyAngles {
+                        anglesOverlay(angles: angles, isTrophyPose: trophyPoseDetected)
+                    }
                 }
             }
         }
     }
+    
+    // MARK: - Angles Overlay (🔧 修正: 常に表示)
+    private func anglesOverlay(angles: TrophyPoseAngles, isTrophyPose: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // ヘッダー（トロフィーポーズ時のみ強調表示）
+            if isTrophyPose {
+                HStack(spacing: 8) {
+                    Image(systemName: "trophy.fill")
+                        .foregroundColor(.yellow)
+                        .font(.title3)
+                    
+                    Text("トロフィーポーズ検出")
+                        .font(.headline)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.yellow.opacity(0.2))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color.yellow, lineWidth: 2)
+                        )
+                )
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "figure.stand")
+                        .foregroundColor(.white)
+                        .font(.title3)
+                    
+                    Text("リアルタイム角度")
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.white.opacity(0.1))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                        )
+                )
+            }
+            
+            // 角度データ表示
+            VStack(spacing: 4) {
+                if let rightElbow = angles.rightElbowAngle {
+                    angleRow(
+                        label: "右肘",
+                        angle: rightElbow,
+                        color: .green,
+                        isHighlighted: isTrophyPose
+                    )
+                }
+                
+                if let rightArmpit = angles.rightArmpitAngle {
+                    angleRow(
+                        label: "右脇",
+                        angle: rightArmpit,
+                        color: .green,
+                        isHighlighted: isTrophyPose
+                    )
+                }
+                
+                if let leftElbow = angles.leftElbowAngle {
+                    angleRow(
+                        label: "左肘",
+                        angle: leftElbow,
+                        color: .orange,
+                        isHighlighted: isTrophyPose
+                    )
+                }
+                
+                if let leftShoulder = angles.leftShoulderAngle {
+                    angleRow(
+                        label: "左肩",
+                        angle: leftShoulder,
+                        color: .orange,
+                        isHighlighted: isTrophyPose
+                    )
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.black.opacity(isTrophyPose ? 0.8 : 0.6))
+            )
+        }
+        .padding(.leading, 16)
+        .padding(.top, 120)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    
+    // フィードバックメッセージセクション（🔧 新規追加）
+    
+    // 角度表示の行コンポーネント（🔧 修正: isHighlightedパラメータ追加）
+    // 🔧 修正: 角度表示の行コンポーネント（シンプル版）
+    private func angleRow(label: String, angle: Double, color: Color, isHighlighted: Bool) -> some View {
+        HStack(spacing: 8) {
+            // ラベル
+            Text(label)
+                .font(.caption)
+                .fontWeight(isHighlighted ? .semibold : .regular)
+                .foregroundColor(.white)
+                .frame(width: 40, alignment: .leading)
+            
+            // 角度値
+            Text("\(String(format: "%.1f", angle))°")
+                .font(.caption)
+                .fontWeight(isHighlighted ? .semibold : .regular)
+                .monospacedDigit()
+                .foregroundColor(color)
+                .frame(minWidth: 50, alignment: .trailing)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.white.opacity(isHighlighted ? 0.15 : 0.08))
+        )
+    }
+    
+    // 🔧 削除: 角度の正規化、評価ロジック、インジケーター（シンプル化のため不要）
     
     // MARK: - Skeleton Lines
     private func skeletonLines(pose: PoseData, in size: CGSize) -> some View {
@@ -99,7 +234,8 @@ struct PoseOverlayView: View {
                 // Highlight trophy pose key joints (elbows and wrists)
                 let isTrophyJoint = trophyPoseDetected && (
                     joint == .rightElbow || joint == .rightWrist ||
-                    joint == .leftElbow || joint == .leftWrist
+                    joint == .leftElbow || joint == .leftWrist ||
+                    joint == .rightShoulder || joint == .leftShoulder
                 )
                 
                 let color = isTrophyJoint ? trophyHighlightColor : jointColor
@@ -169,12 +305,26 @@ struct PoseOverlayView: View {
     }
 }
 
+// MARK: - Trophy Pose Angles Data Structure (新規追加)
+struct TrophyPoseAngles {
+    let rightElbowAngle: Double?
+    let rightArmpitAngle: Double?
+    let leftElbowAngle: Double?
+    let leftShoulderAngle: Double?
+}
+
 // MARK: - Preview
 #Preview {
     PoseOverlayView(
         pose: nil,
         viewSize: CGSize(width: 375, height: 812),
-        trophyPoseDetected: false
+        trophyPoseDetected: false,  // リアルタイム表示のプレビュー
+        trophyAngles: TrophyPoseAngles(
+            rightElbowAngle: 165.0,
+            rightArmpitAngle: 95.0,
+            leftElbowAngle: 170.0,
+            leftShoulderAngle: 65.0
+        )
     )
     .background(Color.black)
 }

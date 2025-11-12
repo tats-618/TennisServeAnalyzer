@@ -78,22 +78,22 @@ struct AnalysisResultsView: View {
         .cornerRadius(16)
     }
     
-    // MARK: - Metrics Section (v0.2の8指標)
+    // MARK: - Metrics Section (8指標)
     private var metricsSection: some View {
         VStack(spacing: 16) {
-            Text("各項目のスコア（v0.2）")
+            Text("各項目のスコア")
                 .font(.headline)
                 .frame(maxWidth: .infinity, alignment: .leading)
             
             VStack(spacing: 12) {
                 metricRow(
-                    title: "1. 肘の角度（トロフィー）",
+                    title: "1. 肘の角度（トロフィーポーズ時）",
                     score: metrics.score1_elbowAngle,
                     rawValue: String(format: "%.1f°", metrics.elbowAngleDeg)
                 )
                 
                 metricRow(
-                    title: "2. 脇の角度（トロフィー）",
+                    title: "2. 脇の角度（トロフィーポーズ時）",
                     score: metrics.score2_armpitAngle,
                     rawValue: String(format: "%.1f°", metrics.armpitAngleDeg)
                 )
@@ -105,9 +105,9 @@ struct AnalysisResultsView: View {
                 )
                 
                 metricRow(
-                    title: "4. 左手位置（体幹/伸展）",
+                    title: "4. 左手位置（左肩/左肘）",
                     score: metrics.score4_leftHandPosition,
-                    rawValue: String(format: "体幹: %.1f° / 伸展: %.1f°",
+                    rawValue: String(format: "左肩: %.1f° / 左肘: %.1f°",
                                      metrics.leftArmTorsoAngleDeg,
                                      metrics.leftArmExtensionDeg)
                 )
@@ -119,7 +119,7 @@ struct AnalysisResultsView: View {
                 )
                 
                 metricRow(
-                    title: "6. ラケット面の角度（インパクト）",
+                    title: "6. ラケット面の向き（インパクト）",
                     score: metrics.score6_racketFaceAngle,
                     rawValue: String(format: "左右: %.1f° / 上下: %.1f°",
                                      metrics.racketFaceYawDeg,
@@ -127,13 +127,13 @@ struct AnalysisResultsView: View {
                 )
                 
                 metricRow(
-                    title: "7. トスの位置（前方距離）",
+                    title: "7. トスの位置",
                     score: metrics.score7_tossPosition,
                     rawValue: String(format: "%.2fm", metrics.tossForwardDistanceM)
                 )
                 
                 metricRow(
-                    title: "8. リストワーク（総回転）",
+                    title: "8. リストワーク",
                     score: metrics.score8_wristwork,
                     rawValue: String(format: "%.0f°", metrics.wristRotationDeg)
                 )
@@ -327,7 +327,7 @@ struct AnalysisResultsView: View {
                 score: metrics.score5_bodyAxisTilt
             ),
             (
-                title: "ラケット面の角度",
+                title: "ラケット面の向き",
                 message: "インパクト直前のYaw/Pitchを0付近に収束させ、面ブレを抑制。",
                 score: metrics.score6_racketFaceAngle
             ),

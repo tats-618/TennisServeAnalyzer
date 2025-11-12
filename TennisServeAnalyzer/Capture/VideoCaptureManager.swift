@@ -359,7 +359,7 @@ extension VideoCaptureManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         droppedFrames += 1
         
         if droppedFrames % 10 == 0 {
-            print("⚠️ Dropped frames: \(droppedFrames)")
+            //print("⚠️ Dropped frames: \(droppedFrames)")
         }
     }
 }

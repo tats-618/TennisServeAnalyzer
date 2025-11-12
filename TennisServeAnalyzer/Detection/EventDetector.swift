@@ -23,6 +23,12 @@ struct TrophyPoseEvent {
     let elbowAngle: Double?
     let shoulderAbduction: Double?
     let isValid: Bool
+    
+    // 🔧 追加: 詳細な角度データ（ボール頂点時の実際の角度）
+    let rightElbowAngle: Double?
+    let rightArmpitAngle: Double?
+    let leftShoulderAngle: Double?
+    let leftElbowAngle: Double?
 }
 
 struct ImpactEvent {
@@ -93,7 +99,11 @@ class EventDetector {
             confidence: confidence,
             elbowAngle: elbowAngle,
             shoulderAbduction: shoulderAbduction,
-            isValid: true
+            isValid: true,
+            rightElbowAngle: nil,
+            rightArmpitAngle: nil,
+            leftShoulderAngle: nil,
+            leftElbowAngle: nil
         )
     }
     

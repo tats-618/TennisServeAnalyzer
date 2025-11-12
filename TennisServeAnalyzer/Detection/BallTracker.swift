@@ -1,4 +1,4 @@
-//なう
+//
 //  BallTracker.swift (100% COMPLETE VERSION)
 //  TennisServeAnalyzer
 //

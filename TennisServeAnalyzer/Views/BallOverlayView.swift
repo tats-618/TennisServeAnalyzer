@@ -129,7 +129,7 @@ struct BallOverlayView: View {
             
             // Y position indicator for debugging
             #if DEBUG
-            Text("y:\(Int(ball.position.y))")
+            Text("x:\(Int(ball.position.x)), y:\(Int(ball.position.y))")
                 .font(.system(size: 8, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7))
             #endif
