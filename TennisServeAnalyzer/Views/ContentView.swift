@@ -16,10 +16,16 @@ struct ContentView: View {
             // Background
             Color.black.edgesIgnoringSafeArea(.all)
             
+            // 🔧 修正: 常にカメラプレビューを表示（録画状態に関係なく）
+            if case .idle = videoAnalyzer.state {
+                CameraPreviewView(videoAnalyzer: videoAnalyzer)
+                    .edgesIgnoringSafeArea(.all)
+            }
+            
             // Main content based on state
             switch videoAnalyzer.state {
             case .idle:
-                idleView
+                idleOverlayView
                 
             case .recording:
                 recordingView
@@ -44,29 +50,39 @@ struct ContentView: View {
         }
         .onAppear {
             print("📱 ContentView appeared")
+            // 🔧 追加: アプリ起動時にカメラプレビューを準備
+            videoAnalyzer.prepareCameraPreview()
         }
     }
     
-    // MARK: - Idle View
-    private var idleView: some View {
+    // MARK: - Idle Overlay View (カメラプレビューの上に表示)
+    private var idleOverlayView: some View {
         VStack {
             Spacer()
             
-            Text("Tennis Serve Analyzer")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-            
-            Text("サーブフォームを解析します")
-                .font(.headline)
-                .foregroundColor(.gray)
-                .padding(.top, 8)
+            // 半透明の背景でテキストを見やすく
+            VStack(spacing: 16) {
+                Text("Tennis Serve Analyzer")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .shadow(color: .black, radius: 4, x: 0, y: 2)
+                
+                Text("サーブフォームを解析します")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .shadow(color: .black, radius: 4, x: 0, y: 2)
+            }
+            .padding(.vertical, 20)
+            .padding(.horizontal, 30)
+            .background(Color.black.opacity(0.6))
+            .cornerRadius(20)
             
             Spacer()
             
             Button(action: {
                 print("🎬 User tapped Start")
-                videoAnalyzer.startSession()
+                videoAnalyzer.startRecording()
             }) {
                 HStack {
                     Image(systemName: "video.fill")
@@ -78,6 +94,7 @@ struct ContentView: View {
                 .frame(width: 200, height: 60)
                 .background(Color.blue)
                 .cornerRadius(30)
+                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
             }
             .padding(.bottom, 100)
         }
@@ -91,7 +108,7 @@ struct ContentView: View {
                 CameraPreviewView(videoAnalyzer: videoAnalyzer)
                     .edgesIgnoringSafeArea(.all)
                 
-                // Pose overlay with trophy angles (修正: trophyAnglesパラメータを追加)
+                // Pose overlay with trophy angles
                 if let pose = videoAnalyzer.detectedPose {
                     PoseOverlayView(
                         pose: pose,
@@ -137,6 +154,7 @@ struct ContentView: View {
                         .frame(width: 200, height: 60)
                         .background(Color.red)
                         .cornerRadius(30)
+                        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
                     }
                     .padding(.bottom, 50)
                 }
@@ -146,51 +164,75 @@ struct ContentView: View {
     
     // MARK: - Analyzing View
     private var analyzingView: some View {
-        VStack(spacing: 20) {
-            ProgressView()
-                .scaleEffect(2.0)
-                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+        ZStack {
+            // 🔧 追加: 解析中もカメラプレビューを背景に表示
+            CameraPreviewView(videoAnalyzer: videoAnalyzer)
+                .edgesIgnoringSafeArea(.all)
+                .opacity(0.3) // 半透明にして解析表示を見やすく
             
-            Text("解析中...")
-                .font(.title2)
-                .foregroundColor(.white)
+            VStack(spacing: 20) {
+                ProgressView()
+                    .scaleEffect(2.0)
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                
+                Text("解析中...")
+                    .font(.title2)
+                    .foregroundColor(.white)
+                    .shadow(color: .black, radius: 4, x: 0, y: 2)
+            }
+            .padding(30)
+            .background(Color.black.opacity(0.7))
+            .cornerRadius(20)
         }
     }
     
     // MARK: - Error View
     private func errorView(message: String) -> some View {
-        VStack(spacing: 20) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.red)
+        ZStack {
+            // 🔧 追加: エラー時もカメラプレビューを背景に表示
+            CameraPreviewView(videoAnalyzer: videoAnalyzer)
+                .edgesIgnoringSafeArea(.all)
+                .opacity(0.3)
             
-            Text("エラー")
-                .font(.title)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-            
-            Text(message)
-                .font(.body)
-                .foregroundColor(.gray)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            Button(action: {
-                videoAnalyzer.reset()
-            }) {
-                Text("戻る")
-                    .fontWeight(.semibold)
+            VStack(spacing: 20) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(.red)
+                
+                Text("エラー")
+                    .font(.title)
+                    .fontWeight(.bold)
                     .foregroundColor(.white)
-                    .frame(width: 150, height: 50)
-                    .background(Color.blue)
-                    .cornerRadius(25)
+                    .shadow(color: .black, radius: 4, x: 0, y: 2)
+                
+                Text(message)
+                    .font(.body)
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                    .shadow(color: .black, radius: 4, x: 0, y: 2)
+                
+                Button(action: {
+                    videoAnalyzer.reset()
+                }) {
+                    Text("戻る")
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(width: 150, height: 50)
+                        .background(Color.blue)
+                        .cornerRadius(25)
+                        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+                }
+                .padding(.top, 20)
             }
-            .padding(.top, 20)
+            .padding(30)
+            .background(Color.black.opacity(0.7))
+            .cornerRadius(20)
         }
     }
 }
 
-// MARK: - Camera Preview View
+// MARK: - Camera Preview View (変更なし)
 struct CameraPreviewView: UIViewRepresentable {
     let videoAnalyzer: VideoAnalyzer
     
@@ -232,7 +274,7 @@ struct CameraPreviewView: UIViewRepresentable {
     }
 }
 
-// MARK: - Status Indicator View
+// MARK: - Status Indicator View (変更なし)
 struct StatusIndicatorView: View {
     let state: AnalysisState
     let fps: Double

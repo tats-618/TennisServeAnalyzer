@@ -208,7 +208,7 @@ final class ServeAnalyzer: ObservableObject {
     }
 
     // MARK: - Calibration Flow
-    /// ② “水平キャリブレーション” → IMU自動起動 → 平面置きで登録
+    /// ② "水平キャリブレーション" → IMU自動起動 → 平面置きで登録
     func beginCalibLevel() {
         calibStage = .levelPrompt
         ensureIMUStarted() // ← 自動起動
@@ -230,7 +230,7 @@ final class ServeAnalyzer: ObservableObject {
         print("🔧 calib: level captured")
     }
 
-    /// ④ “方向キャリブレーション”
+    /// ④ "方向キャリブレーション"
     /// ディスプレイ正面を打ちたい方向へ、ディスプレイ上端が+Yになるように立てる。
     /// → 世界座標の「端末Y軸」と「面法線（基準）」を保存。
     func beginCalibDirection() {
@@ -277,7 +277,7 @@ final class ServeAnalyzer: ObservableObject {
         print("🔧 calib: saved yAxisWorld & faceNormal0World")
     }
 
-    /// ⑦ “キャリブレーション終了　準備完了”
+    /// ⑦ "キャリブレーション終了　準備完了"
     func finishCalibration() {
         guard hasLevelCalib, hasDirCalib else {
             WKInterfaceDevice.current().play(.failure)
@@ -400,10 +400,18 @@ final class ServeAnalyzer: ObservableObject {
             let warmupDone = (warmupWindows <= 0)
             let isHit = warmupDone && absOk && relOk && debounceOK
 
+            // 現在のRoll/Pitch角度を取得（キャリブ済みの場合のみ）
+            var rollStr = "N/A"
+            var pitchStr = "N/A"
+            if let (r, p) = snapshotFaceAngles(atMs: centerMs) {
+                rollStr = String(format: "%.1f°", r)
+                pitchStr = String(format: "%.1f°", p)
+            }
+
             let mark = isHit ? "🎯" : " "
             print(String(
-                format: "%@AUD t=%lldms win=%d | RMS=%.1f dBFS, Peak=%.1f dBFS, ΔPeak(baseline)=%.1f dB, ZCR=%.3f",
-                mark, centerMs, win, rmsDb, peakDb, relFromBaseline, zcr
+                format: "%@AUD t=%lldms win=%d | RMS=%.1f dBFS, Peak=%.1f dBFS, ΔPeak(baseline)=%.1f dB, ZCR=%.3f | Roll=%@, Pitch=%@",
+                mark, centerMs, win, rmsDb, peakDb, relFromBaseline, zcr, rollStr, pitchStr
             ))
 
             if isHit {
@@ -521,4 +529,3 @@ final class ServeAnalyzer: ObservableObject {
         collectionState = .idle
     }
 }
-
