@@ -3,6 +3,7 @@
 //  TennisServeAnalyzer
 //
 //  Real-time skeleton visualization overlay with trophy pose angles
+//  🔧 修正: TrophyPoseAngles の重複定義を削除
 //
 
 import SwiftUI
@@ -176,10 +177,7 @@ struct PoseOverlayView: View {
         )
     }
     
-    // フィードバックメッセージセクション（🔧 新規追加）
-    
-    // 角度表示の行コンポーネント（🔧 修正: isHighlightedパラメータ追加）
-    // 🔧 修正: 角度表示の行コンポーネント（シンプル版）
+    // 角度表示の行コンポーネント（🔧 修正: シンプル版）
     private func angleRow(label: String, angle: Double, color: Color, isHighlighted: Bool) -> some View {
         HStack(spacing: 8) {
             // ラベル
@@ -204,8 +202,6 @@ struct PoseOverlayView: View {
                 .fill(Color.white.opacity(isHighlighted ? 0.15 : 0.08))
         )
     }
-    
-    // 🔧 削除: 角度の正規化、評価ロジック、インジケーター（シンプル化のため不要）
     
     // MARK: - Skeleton Lines
     private func skeletonLines(pose: PoseData, in size: CGSize) -> some View {
@@ -339,13 +335,7 @@ struct PoseOverlayView: View {
     }
 }
 
-// MARK: - Trophy Pose Angles Data Structure (新規追加)
-struct TrophyPoseAngles {
-    let rightElbowAngle: Double?
-    let rightArmpitAngle: Double?
-    let leftElbowAngle: Double?
-    let leftShoulderAngle: Double?
-}
+// 🔧 削除: TrophyPoseAngles の重複定義を削除（TrophyPoseAngles.swift で定義）
 
 // MARK: - Preview
 #Preview {
@@ -354,10 +344,10 @@ struct TrophyPoseAngles {
         viewSize: CGSize(width: 375, height: 812),
         trophyPoseDetected: false,  // リアルタイム表示のプレビュー
         trophyAngles: TrophyPoseAngles(
-            rightElbowAngle: 165.0,
-            rightArmpitAngle: 95.0,
-            leftElbowAngle: 170.0,
-            leftShoulderAngle: 65.0
+            rightElbow: 165.0,
+            rightArmpit: 95.0,
+            leftElbow: 170.0,
+            leftShoulder: 65.0
         ),
         pelvisPosition: CGPoint(x: 187, y: 400)  // 🔧 追加: プレビュー用の骨盤座標
     )

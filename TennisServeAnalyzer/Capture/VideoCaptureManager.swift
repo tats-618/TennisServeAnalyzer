@@ -3,10 +3,7 @@
 //  TennisServeAnalyzer
 //
 //  Camera capture system for tennis serve analysis
-//  - 120fps vertical video (1080p)
-//  - EXIF orientation handling
-//  - Real-time frame processing
-//  - Timestamp synchronization with Watch
+//  🔧 修正: startPreview() メソッドを追加（カメラセッティング用）
 //
 
 import AVFoundation
@@ -210,6 +207,54 @@ class VideoCaptureManager: NSObject, ObservableObject {
             
             device.unlockForConfiguration()
         }
+    
+    // MARK: - 🆕 Preview Control (カメラセッティング用)
+    /// カメラプレビューのみを開始（録画なし）
+    func startPreview() {
+        guard let session = captureSession else { return }
+        
+        print("📷 Starting camera preview (no recording)...")
+        
+        videoQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            // セッションが既に実行中なら何もしない
+            if session.isRunning {
+                print("✅ Session already running")
+                return
+            }
+            
+            // セッションを開始
+            print("▶️ Starting preview session...")
+            session.startRunning()
+            
+            // デバイス情報を表示
+            if let device = self.videoDevice {
+                let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+                let fps = device.activeVideoMaxFrameDuration
+                let actualFPS = Double(fps.timescale) / Double(fps.value)
+                print("📹 Preview format: \(dims.width)x\(dims.height) @ \(actualFPS)fps")
+            }
+            
+            DispatchQueue.main.async {
+                print("✅ Camera preview started")
+            }
+        }
+    }
+    
+    /// カメラプレビューを停止（録画していない場合）
+    func stopPreview() {
+        guard let session = captureSession, !isRecording else { return }
+        
+        print("📷 Stopping camera preview...")
+        
+        videoQueue.async {
+            if session.isRunning {
+                session.stopRunning()
+                print("✅ Camera preview stopped")
+            }
+        }
+    }
     
     // MARK: - Recording Control
     func startRecording() {
