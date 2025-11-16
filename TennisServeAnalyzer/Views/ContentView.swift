@@ -3,7 +3,7 @@
 //  TennisServeAnalyzer
 //
 //  Main view with camera setup flow
-//  🔧 修正: カメラセッティング画面を追加
+//  🔧 修正: セッション管理に対応
 //
 
 import SwiftUI
@@ -35,10 +35,21 @@ struct ContentView: View {
                 AnalysisResultsView(
                     metrics: metrics,
                     onRetry: {
-                        videoAnalyzer.reset()
+                        // 🔧 変更: setupCameraに直接移動
+                        videoAnalyzer.retryMeasurement()
                     },
-                    onFinish: {
-                        videoAnalyzer.reset()
+                    onEndSession: {
+                        // 🆕 新規: セッション終了
+                        videoAnalyzer.endSession()
+                    }
+                )
+                
+            case .sessionSummary(let allMetrics):
+                // 🆕 新規: セッションまとめ画面
+                SessionSummaryView(
+                    serves: allMetrics,
+                    onNewSession: {
+                        videoAnalyzer.resetSession()
                     }
                 )
                 
@@ -51,7 +62,7 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - 🆕 Idle View (アプリ起動直後)
+    // MARK: - Idle View (アプリ起動直後)
     private var idleView: some View {
         VStack {
             Spacer()
@@ -114,7 +125,7 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - 🆕 Camera Setup View (カメラ設置画面)
+    // MARK: - Camera Setup View (カメラ設置画面)
     private var cameraSetupView: some View {
         GeometryReader { geometry in
             ZStack {

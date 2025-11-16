@@ -317,7 +317,7 @@ enum MetricsCalculator {
         // - 折れが大きい 5° < Δθ ≤ 60° : 100×((60−Δθ)/55)
         // - 最低レベル 60° < Δθ : 0点
         
-        if deltaDeg <= 5 {
+        if deltaDeg <= 10 {
             return 100
         } else if deltaDeg <= 60 {
             return Int(100.0 * (60.0 - deltaDeg) / 55.0)

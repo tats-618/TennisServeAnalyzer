@@ -3,6 +3,7 @@
 //  TennisServeAnalyzer
 //
 //  Serve analysis results display with actionable feedback
+//  🔧 修正: セッション管理に対応
 //
 
 import SwiftUI
@@ -10,8 +11,8 @@ import SwiftUI
 // MARK: - Analysis Results View
 struct AnalysisResultsView: View {
     let metrics: ServeMetrics
-    let onRetry: () -> Void
-    let onFinish: () -> Void
+    let onRetry: () -> Void           // 🔧 変更: setupCameraに移動
+    let onEndSession: () -> Void      // 🆕 新規追加
     
     // MARK: - Body
     var body: some View {
@@ -241,9 +242,10 @@ struct AnalysisResultsView: View {
         .cornerRadius(12)
     }
     
-    // MARK: - Action Buttons
+    // MARK: - 🔧 修正: Action Buttons
     private var actionButtons: some View {
         VStack(spacing: 12) {
+            // 🔧 変更: カメラセッティング画面に直接移動
             Button(action: onRetry) {
                 HStack {
                     Image(systemName: "arrow.clockwise")
@@ -257,9 +259,10 @@ struct AnalysisResultsView: View {
                 .cornerRadius(12)
             }
             
-            Button(action: onFinish) {
+            // 🆕 新規: セッション終了ボタン
+            Button(action: onEndSession) {
                 HStack {
-                    Image(systemName: "checkmark.circle")
+                    Image(systemName: "chart.bar.fill")
                     Text("セッション終了")
                         .fontWeight(.semibold)
                 }
@@ -379,6 +382,6 @@ struct AnalysisResultsView: View {
     AnalysisResultsView(
         metrics: sample,
         onRetry: { print("Retry") },
-        onFinish: { print("Finish") }
+        onEndSession: { print("End Session") }
     )
 }
