@@ -76,7 +76,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
     // 通常はユーザーが手動で「停止」ボタンを押すまで撮影を続ける
     // このタイマーは異常に長い撮影を防ぐためのフェイルセーフ
     private let maxSessionDuration: TimeInterval = 60.0
-    private let poseDetectionInterval: Int = 2
+    private let poseDetectionInterval: Int = 5
     
     // MARK: - Initialization
     override init() {
@@ -421,6 +421,79 @@ class VideoAnalyzer: NSObject, ObservableObject {
         )
     }
     
+    // MARK: - 🆕 Outlier Filter for Ball Detection
+    /// ボール検出から外れ値を除外するフィルター
+    private func filterOutliers(from balls: [BallDetection]) -> [BallDetection] {
+        guard balls.count > 2 else { return balls }
+        
+        // タイムスタンプでソート
+        let sortedBalls = balls.sorted { $0.timestamp < $1.timestamp }
+        
+        var filtered: [BallDetection] = []
+        let screenWidth: CGFloat = 1280  // 720pの幅
+        let screenHeight: CGFloat = 720   // 720pの高さ
+        
+        for (index, ball) in sortedBalls.enumerated() {
+            var shouldInclude = true
+            
+            // 1. 画面端の除外（左右50px、上下100px）
+            if ball.position.x < 50 || ball.position.x > screenWidth - 50 {
+                print("🚫 外れ値除外（画面端x）: t=\(String(format: "%.2f", ball.timestamp))s, x=\(Int(ball.position.x))")
+                shouldInclude = false
+            }
+            
+            if ball.position.y < 100 || ball.position.y > screenHeight - 100 {
+                print("🚫 外れ値除外（画面端y）: t=\(String(format: "%.2f", ball.timestamp))s, y=\(Int(ball.position.y))")
+                shouldInclude = false
+            }
+            
+            // 2. 前後のフレームとの距離チェック
+            if index > 0 && shouldInclude {
+                let prevBall = sortedBalls[index - 1]
+                let distance = sqrt(
+                    pow(ball.position.x - prevBall.position.x, 2) +
+                    pow(ball.position.y - prevBall.position.y, 2)
+                )
+                let timeDiff = ball.timestamp - prevBall.timestamp
+                
+                // 1フレーム（約0.016s）で移動可能な最大距離を設定
+                // 120fpsで撮影しているので、約8.3ms間隔
+                // ボールが高速でも1フレームで100px以上移動することはない
+                let maxDistancePerFrame: CGFloat = 100
+                let maxDistance = maxDistancePerFrame * CGFloat(max(timeDiff / 0.016, 1.0))
+                
+                if distance > maxDistance {
+                    print("🚫 外れ値除外（距離）: t=\(String(format: "%.2f", ball.timestamp))s, 距離=\(Int(distance))px (前フレームから)")
+                    shouldInclude = false
+                }
+            }
+            
+            // 3. 次のフレームとの距離チェック
+            if index < sortedBalls.count - 1 && shouldInclude {
+                let nextBall = sortedBalls[index + 1]
+                let distance = sqrt(
+                    pow(ball.position.x - nextBall.position.x, 2) +
+                    pow(ball.position.y - nextBall.position.y, 2)
+                )
+                let timeDiff = nextBall.timestamp - ball.timestamp
+                
+                let maxDistancePerFrame: CGFloat = 100
+                let maxDistance = maxDistancePerFrame * CGFloat(max(timeDiff / 0.016, 1.0))
+                
+                if distance > maxDistance {
+                    print("🚫 外れ値除外（距離）: t=\(String(format: "%.2f", ball.timestamp))s, 距離=\(Int(distance))px (次フレームへ)")
+                    shouldInclude = false
+                }
+            }
+            
+            if shouldInclude {
+                filtered.append(ball)
+            }
+        }
+        
+        return filtered
+    }
+    
     // MARK: - 🆕 Trophy Pose Detection from Ball Apex
     /// ボール軌跡から頂点（y座標最小）を見つけ、そのタイムスタンプのポーズをトロフィーポーズとする
     private func detectTrophyPoseFromBallApex() -> TrophyPoseEvent? {
@@ -436,13 +509,23 @@ class VideoAnalyzer: NSObject, ObservableObject {
             return nil
         }
         
-        print("📊 ボール検出数: \(ballHistory.count)")
+        print("📊 ボール検出数（フィルター前）: \(ballHistory.count)")
+        
+        // 🆕 外れ値を除外するフィルター
+        let filteredBalls = filterOutliers(from: ballHistory)
+        
+        guard !filteredBalls.isEmpty else {
+            print("⚠️ フィルター後にボール検出がありません")
+            return nil
+        }
+        
+        print("📊 ボール検出数（フィルター後）: \(filteredBalls.count)")
         
         // y座標が最小のボール（画面上で最も高い位置）を見つける
         var apexBall: BallDetection?
         var minY: CGFloat = .infinity
         
-        for ball in ballHistory {
+        for ball in filteredBalls {
             if ball.position.y < minY {
                 minY = ball.position.y
                 apexBall = ball
@@ -709,6 +792,8 @@ class VideoAnalyzer: NSObject, ObservableObject {
             racketFacePitchDeg: rfPitch,
             tossForwardDistanceM: tossM,
             wristRotationDeg: wristDeg,
+            tossPositionX: 0.0,
+            tossOffsetFromCenterPx: 0.0,
             score1_elbowAngle: s1,
             score2_armpitAngle: s2,
             score3_lowerBodyContribution: s3,

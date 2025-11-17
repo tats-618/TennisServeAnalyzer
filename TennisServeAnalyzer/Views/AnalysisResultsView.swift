@@ -130,7 +130,10 @@ struct AnalysisResultsView: View {
                 metricRow(
                     title: "7. トスの位置",
                     score: metrics.score7_tossPosition,
-                    rawValue: String(format: "%.2fm", metrics.tossForwardDistanceM)
+                    rawValue: String(format: "前方: %.2fm, 横: %.0fpx (%@)",
+                                     metrics.tossForwardDistanceM,
+                                     abs(metrics.tossOffsetFromCenterPx),
+                                     metrics.tossOffsetFromCenterPx >= 0 ? "右" : "左")
                 )
                 
                 metricRow(
@@ -366,6 +369,8 @@ struct AnalysisResultsView: View {
         racketFacePitchDeg: 6.0,
         tossForwardDistanceM: 0.35,
         wristRotationDeg: 180.0,
+        tossPositionX: 760.0,
+        tossOffsetFromCenterPx: 120.0,
         score1_elbowAngle: 95,
         score2_armpitAngle: 88,
         score3_lowerBodyContribution: 90,

@@ -22,6 +22,10 @@ struct ServeMetrics: Codable {
     public let racketFacePitchDeg: Double           // 6b: ラケット面（Pitch）
     public let tossForwardDistanceM: Double         // 7: トス前方距離[m]
     public let wristRotationDeg: Double             // 8: リストワーク（Trophy→Impactの回内外合計角度）
+    
+    // 🆕 トスの横位置情報
+    public let tossPositionX: Double                 // トスのx座標（ピクセル）
+    public let tossOffsetFromCenterPx: Double        // 画面中央からの距離（ピクセル）正=右, 負=左
 
     // Scores (0–100)
     public let score1_elbowAngle: Int
@@ -124,14 +128,14 @@ enum MetricsCalculator {
         if let f = rfFlag { flags.append(f) }
         let score6 = scoreRacketFace(yaw: rfYaw, pitch: rfPitch)
 
-        // ========= 7) トス前進距離[m] =========
-        let (tossM, tossFlag) = estimateTossForwardDistance(
+        // ========= 7) トス前進距離[m] とトスの横位置 =========
+        let tossResult = estimateTossForwardDistance(
             tossHistory: tossHistory,
             poseRef: trophyPose.pose,
             courtCalib: courtCalibration
         )
-        if let f = tossFlag { flags.append(f) }
-        let score7 = scoreTossForward(tossM)
+        if let f = tossResult.flag { flags.append(f) }
+        let score7 = scoreTossForward(tossResult.forwardM)
 
         // ========= 8) リストワーク（合計回内外角度）=========
         let wristDeg = estimateWristRotationDeg(
@@ -155,8 +159,10 @@ enum MetricsCalculator {
             bodyAxisDeviationDeg: bodyAxis,
             racketFaceYawDeg: rfYaw,
             racketFacePitchDeg: rfPitch,
-            tossForwardDistanceM: tossM,
+            tossForwardDistanceM: tossResult.forwardM,
             wristRotationDeg: wristDeg,
+            tossPositionX: tossResult.posX,
+            tossOffsetFromCenterPx: tossResult.offsetFromCenter,
             score1_elbowAngle: score1,
             score2_armpitAngle: score2,
             score3_lowerBodyContribution: score3,
@@ -386,32 +392,42 @@ enum MetricsCalculator {
         return sYaw + sPitch
     }
 
-    // MARK: - 7) トス前方距離[m]
+    // MARK: - 7) トス前方距離[m] とトスの横位置
     private static func estimateTossForwardDistance(
         tossHistory: [BallDetection],
         poseRef: PoseData,
         courtCalib: CourtCalibration?
-    ) -> (Double, String?) {
+    ) -> (forwardM: Double, posX: Double, offsetFromCenter: Double, flag: String?) {
         guard let apex = tossHistory.max(by: { $0.position.y < $1.position.y }) else {
-            return (0.0, "no_toss_apex")
+            return (0.0, 0.0, 0.0, "no_toss_apex")
         }
+        
+        // トスのx座標を取得
+        let tossX = Double(apex.position.x)
+        
+        // 画面中央を計算
+        let screenCenterX = Double(poseRef.imageSize.width) / 2.0
+        
+        // 画面中央からの距離を計算（正=右、負=左）
+        let offsetFromCenter = tossX - screenCenterX
+        
         if let cc = courtCalib {
             // Phase 2: ホモグラフィで z=0 へ投影して前方距離を算出
             // ここでは API だけ合わせ、実装は CourtCalibration 側のメソッドを想定
             if let meters = cc.projectForwardDistanceToBaseline(pixelPoint: apex.position) {
-                return (meters, nil)
+                return (meters, tossX, offsetFromCenter, nil)
             } else {
-                return (0.0, "court_calib_projection_failed")
+                return (0.0, tossX, offsetFromCenter, "court_calib_projection_failed")
             }
         } else {
             // 暫定：画面座標の基準（肩中点）からの x 差を画面幅で規格化→係数0.8m換算
             guard let ls = poseRef.joints[.leftShoulder], let rs = poseRef.joints[.rightShoulder] else {
-                return (0.0, "no_shoulders_for_toss_approx")
+                return (0.0, tossX, offsetFromCenter, "no_shoulders_for_toss_approx")
             }
             let shoulderMidX = (ls.x + rs.x) / 2.0
             let dx = Double(apex.position.x - shoulderMidX)
             let ratio = dx / Double(poseRef.imageSize.width) // [-1,1]程度
-            return (ratio * 0.8, "approx_toss_no_homography")
+            return (ratio * 0.8, tossX, offsetFromCenter, "approx_toss_no_homography")
         }
     }
 
