@@ -56,9 +56,8 @@ struct BallOverlayView: View {
         let scaledRadius = ball.radius * scale
         let displayRadius = max(10.0, min(scaledRadius, 100.0))
         
-        // Color based on position (apex at top = orange)
-        let isLikelyApex = ball.position.y < ball.imageSize.height * 0.3
-        let color = isLikelyApex ? apexColor : ballColor
+        // Always use ball color (yellow)
+        let color = ballColor
         
         return ZStack {
             // Outer glow
@@ -81,15 +80,6 @@ struct BallOverlayView: View {
                 .frame(width: 8, height: 8)
                 .position(clampedPosition)
                 .shadow(color: color, radius: 4)
-            
-            // Pulsing ring for likely apex
-            if isLikelyApex {
-                Circle()
-                    .stroke(apexColor, lineWidth: 2)
-                    .frame(width: displayRadius * 3, height: displayRadius * 3)
-                    .position(clampedPosition)
-                    .opacity(0.6)
-            }
         }
     }
     
@@ -111,10 +101,8 @@ struct BallOverlayView: View {
         
         let scaledRadius = max(10.0, min(ball.radius * scale, 100.0))
         
-        let isLikelyApex = ball.position.y < ball.imageSize.height * 0.3
-        
         return VStack(spacing: 2) {
-            Text(isLikelyApex ? "🎯" : "🎾")
+            Text("🎾")
                 .font(.caption2)
             
             Text("\(Int(ball.confidence * 100))%")
