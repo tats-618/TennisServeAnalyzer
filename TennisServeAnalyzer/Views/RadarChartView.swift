@@ -2,9 +2,8 @@
 //  RadarChartView.swift
 //  TennisServeAnalyzer
 //
-//  Created by 島本健生 on 2025/11/06.
+//  🔧 v1.1 — 点と線のずれ修正（sortedKeys統一）
 //
-
 
 import SwiftUI
 
@@ -13,6 +12,11 @@ struct RadarChartView: View {
     let referenceMetrics: [String: Int]?  // 比較対象（初球など）
     
     private let maxValue: Double = 100.0
+    
+    // 🔧 修正: キーの順序を固定（すべての描画で同じ順序を使用）
+    private var sortedKeys: [String] {
+        Array(metrics.keys).sorted()
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -35,9 +39,10 @@ struct RadarChartView: View {
                         .position(x: center.x, y: center.y - radius * CGFloat(value) / 100)
                 }
                 
-                // 軸線
-                ForEach(Array(metrics.keys.enumerated()), id: \.offset) { index, key in
-                    let angle = angleForIndex(index, total: metrics.count)
+                // 軸線とラベル
+                // 🔧 修正: sortedKeysを使用
+                ForEach(Array(sortedKeys.enumerated()), id: \.offset) { index, key in
+                    let angle = angleForIndex(index, total: sortedKeys.count)
                     
                     Path { path in
                         path.move(to: center)
@@ -59,6 +64,23 @@ struct RadarChartView: View {
                     
                     radarPath(metrics: refMetrics, center: center, radius: radius)
                         .stroke(Color.pink, lineWidth: 2)
+                    
+                    // 🆕 参照データのポイント
+                    ForEach(Array(sortedKeys.enumerated()), id: \.offset) { index, key in
+                        if let value = refMetrics[key] {
+                            let angle = angleForIndex(index, total: sortedKeys.count)
+                            let point = pointOnCircle(
+                                center: center,
+                                radius: radius * CGFloat(Double(value) / maxValue),
+                                angle: angle
+                            )
+                            
+                            Circle()
+                                .fill(Color.pink)
+                                .frame(width: 6, height: 6)
+                                .position(point)
+                        }
+                    }
                 }
                 
                 // 現在のデータ
@@ -69,19 +91,21 @@ struct RadarChartView: View {
                     .stroke(Color.blue, lineWidth: 3)
                 
                 // データポイント
-                ForEach(Array(metrics.enumerated()), id: \.offset) { index, item in
-                    let angle = angleForIndex(index, total: metrics.count)
-                    let value = Double(item.value)
-                    let point = pointOnCircle(
-                        center: center,
-                        radius: radius * CGFloat(value / maxValue),
-                        angle: angle
-                    )
-                    
-                    Circle()
-                        .fill(Color.blue)
-                        .frame(width: 8, height: 8)
-                        .position(point)
+                // 🔧 修正: sortedKeysを使用して、パスと同じ順序で描画
+                ForEach(Array(sortedKeys.enumerated()), id: \.offset) { index, key in
+                    if let value = metrics[key] {
+                        let angle = angleForIndex(index, total: sortedKeys.count)
+                        let point = pointOnCircle(
+                            center: center,
+                            radius: radius * CGFloat(Double(value) / maxValue),
+                            angle: angle
+                        )
+                        
+                        Circle()
+                            .fill(Color.blue)
+                            .frame(width: 8, height: 8)
+                            .position(point)
+                    }
                 }
             }
         }
@@ -89,11 +113,12 @@ struct RadarChartView: View {
     
     private func radarPath(metrics: [String: Int], center: CGPoint, radius: CGFloat) -> Path {
         Path { path in
-            let sortedKeys = Array(metrics.keys).sorted()
+            // 🔧 修正: sortedKeysを使用
+            let keys = Array(metrics.keys).sorted()
             
-            for (index, key) in sortedKeys.enumerated() {
+            for (index, key) in keys.enumerated() {
                 let value = Double(metrics[key] ?? 0)
-                let angle = angleForIndex(index, total: sortedKeys.count)
+                let angle = angleForIndex(index, total: keys.count)
                 let point = pointOnCircle(
                     center: center,
                     radius: radius * CGFloat(value / maxValue),

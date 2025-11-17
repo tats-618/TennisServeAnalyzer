@@ -6,6 +6,7 @@
 //  - JSON (single serve)
 //  - CSV (session summary)
 //  - Raw logs (IMU + Video landmarks)
+//  🔧 修正: トス位置を基準線ベースに変更
 //
 
 import Foundation
@@ -54,7 +55,7 @@ struct CompleteServeRecord: Codable {
         let impactPose: ImpactPose
 
         struct Toss: Codable {
-            let forwardDistanceM: Double
+            let offsetFromBaselinePx: Double  // 🔧 変更: 基準線からのオフセット[px]
         }
         let toss: Toss
     }
@@ -134,7 +135,7 @@ class DataExporter {
                     bodyAxisDeviationDeg: serveMetrics.bodyAxisDeviationDeg
                 ),
                 toss: CompleteServeRecord.VideoData.Toss(
-                    forwardDistanceM: serveMetrics.tossForwardDistanceM
+                    offsetFromBaselinePx: serveMetrics.tossOffsetFromBaselinePx  // 🔧 変更
                 )
             ),
             metrics: CompleteServeRecord.Metrics(
@@ -175,8 +176,8 @@ class DataExporter {
     static func exportSessionToCSV(serves: [ServeMetrics]) -> URL? {
         var csv = ""
         csv += "swing_id,timestamp,total_score,"
-        csv += "elbow_deg,armpit_deg,pelvis_rise_m,left_torso_deg,left_ext_deg,"
-        csv += "body_axis_delta_deg,rface_yaw_deg,rface_pitch_deg,toss_forward_m,wrist_deg,"
+        csv += "elbow_deg,armpit_deg,pelvis_rise_px,left_torso_deg,left_ext_deg,"
+        csv += "body_axis_delta_deg,rface_yaw_deg,rface_pitch_deg,toss_offset_baseline_px,wrist_deg,"
         csv += "score1_elbow,score2_armpit,score3_lower,score4_left,score5_axis,score6_rface,score7_toss,score8_wrist,"
         csv += "flags\n"
 
@@ -190,13 +191,13 @@ class DataExporter {
                 "\(s.totalScore)",
                 String(format: "%.1f", s.elbowAngleDeg),
                 String(format: "%.1f", s.armpitAngleDeg),
-                String(format: "%.3f", s.pelvisRisePx),
+                String(format: "%.1f", s.pelvisRisePx),  // 🔧 変更: px表示
                 String(format: "%.1f", s.leftArmTorsoAngleDeg),
                 String(format: "%.1f", s.leftArmExtensionDeg),
                 String(format: "%.1f", s.bodyAxisDeviationDeg),
                 String(format: "%.1f", s.racketFaceYawDeg),
                 String(format: "%.1f", s.racketFacePitchDeg),
-                String(format: "%.3f", s.tossForwardDistanceM),
+                String(format: "%.1f", s.tossOffsetFromBaselinePx),  // 🔧 変更
                 String(format: "%.0f", s.wristRotationDeg),
                 "\(s.score1_elbowAngle)",
                 "\(s.score2_armpitAngle)",
@@ -297,4 +298,3 @@ class DataExporter {
         return urls
     }
 }
-

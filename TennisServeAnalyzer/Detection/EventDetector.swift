@@ -17,6 +17,8 @@ struct TrophyPoseEvent {
     let timestamp: Double
     let pose: PoseData
     let tossApex: (time: Double, height: CGFloat)?
+    let tossApexX: CGFloat?
+    let filteredBalls: [BallDetection]?
     let confidence: Float
     
     // Trophy pose criteria
@@ -35,7 +37,7 @@ struct ImpactEvent {
     let timestamp: Double
     let monotonicMs: Int64
     let peakAngularVelocity: Double  // rad/s
-    let peakJerk: Double  // m/sÂ³
+    let peakJerk: Double  // m/s³
     let spectralPower: Double  // String vibration power (50-120Hz)
     let confidence: Float
 }
@@ -48,7 +50,7 @@ class EventDetector {
     
     // Adaptive thresholds (initialized with defaults, updated after first 3 serves)
     private var angularVelocityThreshold: Double = 20.0  // rad/s
-    private var jerkThreshold: Double = 500.0  // m/sÂ³
+    private var jerkThreshold: Double = 500.0  // m/s³
     private var calibrationServes: [[ServeSample]] = []
     private var isCalibrated: Bool = false
     
@@ -92,10 +94,13 @@ class EventDetector {
             return nil
         }
         
+        // 🔧 修正: 引数順序を構造体定義と一致させる
         return TrophyPoseEvent(
             timestamp: pose.timestamp,
             pose: pose,
             tossApex: ballApex,
+            tossApexX: nil,              // 🆕 追加（EventDetectorでは未使用）
+            filteredBalls: nil,          // 🆕 追加（EventDetectorでは未使用）
             confidence: confidence,
             elbowAngle: elbowAngle,
             shoulderAbduction: shoulderAbduction,
@@ -219,7 +224,7 @@ class EventDetector {
         frequencyBand: ClosedRange<Double>,
         windowAroundPeak: Int
     ) -> Double {
-        // Extract window around peak (Â±50ms = Â±10 samples at 200Hz)
+        // Extract window around peak (±50ms = ±10 samples at 200Hz)
         let start = max(0, windowAroundPeak - 10)
         let end = min(window.count - 1, windowAroundPeak + 10)
         
@@ -324,14 +329,14 @@ class EventDetector {
             allPeaks.sort()
             let index = Int(Double(allPeaks.count) * 0.9)
             angularVelocityThreshold = allPeaks[min(index, allPeaks.count - 1)] * 0.8
-            print("ðŸ“Š Calibrated angular velocity threshold: \(String(format: "%.2f", angularVelocityThreshold)) rad/s")
+            print("📊 Calibrated angular velocity threshold: \(String(format: "%.2f", angularVelocityThreshold)) rad/s")
         }
         
         if !allJerks.isEmpty {
             allJerks.sort()
             let index = Int(Double(allJerks.count) * 0.9)
             jerkThreshold = allJerks[min(index, allJerks.count - 1)] * 0.8
-            print("ðŸ“Š Calibrated jerk threshold: \(String(format: "%.2f", jerkThreshold)) m/sÂ³")
+            print("📊 Calibrated jerk threshold: \(String(format: "%.2f", jerkThreshold)) m/s³")
         }
     }
     

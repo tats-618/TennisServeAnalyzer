@@ -3,7 +3,9 @@
 //  TennisServeAnalyzer
 //
 //  v0.2 — 8-Metric Calculation and Scoring (0–100 normalized)
-//  ※ 後方互換のため calculateMetrics に末尾パラメータを追加（デフォルト引数）
+//  🔧 v0.2.1 — トス位置評価を基準線ベースに変更
+//  🔧 v0.2.2 — トス位置座標系コメント修正、境界値処理修正
+//  🔧 v0.2.3 — tossApexX優先使用でログ/UI不一致を解消
 //
 
 import Foundation
@@ -20,7 +22,7 @@ struct ServeMetrics: Codable {
     public let bodyAxisDeviationDeg: Double         // 5: 体軸傾き（腰角/膝角の偏差平均, Impact）
     public let racketFaceYawDeg: Double             // 6a: ラケット面（Yaw）
     public let racketFacePitchDeg: Double           // 6b: ラケット面（Pitch）
-    public let tossForwardDistanceM: Double         // 7: トス前方距離[m]
+    public let tossOffsetFromBaselinePx: Double     // 🔧 7: トス位置：基準線からのオフセット[px]（正=前、負=後ろ）
     public let wristRotationDeg: Double             // 8: リストワーク（Trophy→Impactの回内外合計角度）
     
     // 🆕 トスの横位置情報
@@ -45,20 +47,6 @@ struct ServeMetrics: Codable {
     public let flags: [String] // 不足データなどの注記
 }
 
-// MARK: - Weights (sum = 100) ※現在は使用していません（単純平均に変更）
-/*
-private let METRIC_WEIGHTS: [Double] = [
-    10, // 1 肘
-    10, // 2 脇
-    20, // 3 下半身貢献
-    10, // 4 左手位置
-    15, // 5 体軸
-    10, // 6 ラケット面
-    10, // 7 トス位置
-    15  // 8 リストワーク
-]
-*/
-
 // MARK: - Calculator
 enum MetricsCalculator {
 
@@ -69,7 +57,7 @@ enum MetricsCalculator {
     ///   - tossHistory: ボール頂点検出履歴（トス位置推定に使用）
     ///   - imuHistory: Trophy→Impact 区間のIMUサンプル
     ///   - calibration: ラケット座標系キャリブ結果（任意）
-    ///   - courtCalibration: コートホモグラフィ（任意, あれば[m]へ換算）
+    ///   - baselineX: 画面上の縦の基準線のx座標（px）。この線がベースラインと重なる
     ///   - impactPose: 可能ならインパクト時のPose（任意, 未指定ならTrophyで代替）
     ///   - pelvisBasePose: 骨盤測定の基準位置（最も低い位置）、任意
     static func calculateMetrics(
@@ -78,7 +66,7 @@ enum MetricsCalculator {
         tossHistory: [BallDetection],
         imuHistory: [ServeSample],
         calibration: CalibrationResult? = nil,
-        courtCalibration: CourtCalibration? = nil,
+        baselineX: Double,
         impactPose: PoseData? = nil,
         pelvisBasePose: PoseData? = nil
     ) -> ServeMetrics {
@@ -128,14 +116,22 @@ enum MetricsCalculator {
         if let f = rfFlag { flags.append(f) }
         let score6 = scoreRacketFace(yaw: rfYaw, pitch: rfPitch)
 
-        // ========= 7) トス前進距離[m] とトスの横位置 =========
-        let tossResult = estimateTossForwardDistance(
-            tossHistory: tossHistory,
-            poseRef: trophyPose.pose,
-            courtCalib: courtCalibration
-        )
-        if let f = tossResult.flag { flags.append(f) }
-        let score7 = scoreTossForward(tossResult.forwardM)
+        // ========= 7) トス位置：基準線からのオフセット[px] =========
+        // 🔧 修正: trophyPoseのtossApexXを優先使用
+        let tossResult: (offsetFromBaseline: Double, posX: Double, offsetFromCenter: Double, flag: String?)
+        if let tossX = trophyPose.tossApexX {
+            // trophyPoseから直接取得（最も信頼性が高い）
+            let offsetFromBaseline = Double(tossX) - baselineX
+            tossResult = (offsetFromBaseline, Double(tossX), 0.0, nil)
+        } else {
+            // フォールバック: tossHistoryから推定
+            tossResult = estimateTossPosition(
+                tossHistory: tossHistory,
+                baselineX: baselineX
+            )
+            if let f = tossResult.flag { flags.append(f) }
+        }
+        let score7 = scoreTossPosition(tossResult.offsetFromBaseline)
 
         // ========= 8) リストワーク（合計回内外角度）=========
         let wristDeg = estimateWristRotationDeg(
@@ -159,7 +155,7 @@ enum MetricsCalculator {
             bodyAxisDeviationDeg: bodyAxis,
             racketFaceYawDeg: rfYaw,
             racketFacePitchDeg: rfPitch,
-            tossForwardDistanceM: tossResult.forwardM,
+            tossOffsetFromBaselinePx: tossResult.offsetFromBaseline,
             wristRotationDeg: wristDeg,
             tossPositionX: tossResult.posX,
             tossOffsetFromCenterPx: tossResult.offsetFromCenter,
@@ -323,10 +319,10 @@ enum MetricsCalculator {
         // - 折れが大きい 5° < Δθ ≤ 60° : 100×((60−Δθ)/55)
         // - 最低レベル 60° < Δθ : 0点
         
-        if deltaDeg <= 10 {
+        if deltaDeg <= 15 {
             return 100
         } else if deltaDeg <= 60 {
-            return Int(100.0 * (60.0 - deltaDeg) / 55.0)
+            return Int(100.0 * (60.0 - deltaDeg) / 45.0)
         } else {
             return 0
         }
@@ -392,12 +388,11 @@ enum MetricsCalculator {
         return sYaw + sPitch
     }
 
-    // MARK: - 7) トス前方距離[m] とトスの横位置
-    private static func estimateTossForwardDistance(
+    // MARK: - 7) トス位置：基準線からのオフセット（px）
+    private static func estimateTossPosition(
         tossHistory: [BallDetection],
-        poseRef: PoseData,
-        courtCalib: CourtCalibration?
-    ) -> (forwardM: Double, posX: Double, offsetFromCenter: Double, flag: String?) {
+        baselineX: Double
+    ) -> (offsetFromBaseline: Double, posX: Double, offsetFromCenter: Double, flag: String?) {
         guard let apex = tossHistory.max(by: { $0.position.y < $1.position.y }) else {
             return (0.0, 0.0, 0.0, "no_toss_apex")
         }
@@ -405,42 +400,61 @@ enum MetricsCalculator {
         // トスのx座標を取得
         let tossX = Double(apex.position.x)
         
-        // 画面中央を計算
-        let screenCenterX = Double(poseRef.imageSize.width) / 2.0
+        // 🔧 修正: 基準線からのオフセット (u_user)
+        // 座標系の定義:
+        //   正の値 = 基準線より前（画面右側、ネット側）
+        //   負の値 = 基準線より後ろ（画面左側、身体側）
+        //
+        // 例: tossX=432px, baselineX=360px
+        //     → offset = +72px（基準線より72px前方＝ネット側）
+        let offsetFromBaseline = tossX - baselineX
         
-        // 画面中央からの距離を計算（正=右、負=左）
-        let offsetFromCenter = tossX - screenCenterX
+        // 画面中央からの距離を計算（参考値として保持）
+        // 注: imageSize情報がBallDetectionに含まれていない場合は0とする
+        let offsetFromCenter = 0.0 // TODO: 必要に応じてimageSize情報を渡す
         
-        if let cc = courtCalib {
-            // Phase 2: ホモグラフィで z=0 へ投影して前方距離を算出
-            // ここでは API だけ合わせ、実装は CourtCalibration 側のメソッドを想定
-            if let meters = cc.projectForwardDistanceToBaseline(pixelPoint: apex.position) {
-                return (meters, tossX, offsetFromCenter, nil)
-            } else {
-                return (0.0, tossX, offsetFromCenter, "court_calib_projection_failed")
-            }
-        } else {
-            // 暫定：画面座標の基準（肩中点）からの x 差を画面幅で規格化→係数0.8m換算
-            guard let ls = poseRef.joints[.leftShoulder], let rs = poseRef.joints[.rightShoulder] else {
-                return (0.0, tossX, offsetFromCenter, "no_shoulders_for_toss_approx")
-            }
-            let shoulderMidX = (ls.x + rs.x) / 2.0
-            let dx = Double(apex.position.x - shoulderMidX)
-            let ratio = dx / Double(poseRef.imageSize.width) // [-1,1]程度
-            return (ratio * 0.8, tossX, offsetFromCenter, "approx_toss_no_homography")
-        }
+        return (offsetFromBaseline, tossX, offsetFromCenter, nil)
     }
 
-    private static func scoreTossForward(_ meters: Double) -> Int {
-        // 目安：0.2–0.6m 前方を高評価（スイング方向への前進）
-        let a = abs(meters)
-        if (0.2...0.6).contains(a) { return 100 }
-        if (0.1..<0.2).contains(a)  { return lerp(from: 70, to: 100, x: (a-0.1)/0.1) }
-        if (0.6..<0.8).contains(a)  { return lerp(from: 100, to: 70, x: (a-0.6)/0.2) }
-        if (0.05..<0.1).contains(a) { return lerp(from: 40, to: 70, x: (a-0.05)/0.05) }
-        if (0.8..<1.0).contains(a)  { return lerp(from: 70, to: 40, x: (a-0.8)/0.2) }
-        if a < 0.05 { return max(0, Int(40 * a / 0.05)) }
-        return max(0, Int(40 - (a - 1.0) / 0.5 * 40))
+    private static func scoreTossPosition(_ u_user: Double) -> Int {
+        // 🔧 設計書準拠: 基準線からのオフセット評価
+        //
+        // 座標系の定義:
+        //   u_user: 基準線からのずれ（px）
+        //   正の値 = 前（ネット側）
+        //   負の値 = 後ろ（身体側）
+        
+        // 1. 理想範囲: 10px~20px（基準線より少し前）
+        if (10...20).contains(u_user) {
+            return 100
+        }
+        
+        // 2. 後ろすぎ: -89.9px ~ 9.9px（理想範囲の下限より小さい）
+        // 範囲: -90 < u_user < 10（境界を含まない）
+        // スコア = 100 × (u_user + 90) / 100
+        //
+        // 例: u_user = -45px → score = 100×(-45+90)/100 = 45点
+        //     u_user = 0px   → score = 100×(0+90)/100 = 90点
+        //     u_user = 9px   → score = 100×(9+90)/100 = 99点
+        if u_user > -90 && u_user < 10 {
+            let score = 100.0 * (u_user + 90.0) / 100.0
+            return max(0, Int(score))
+        }
+        
+        // 3. 前すぎ: 20.1px ~ 119.9px（理想範囲の上限より大きい）
+        // 範囲: 20 < u_user < 120（境界を含まない）
+        // スコア = 100 × (120 - u_user) / 100
+        //
+        // 例: u_user = 30px  → score = 100×(120-30)/100 = 90点
+        //     u_user = 70px  → score = 100×(120-70)/100 = 50点
+        //     u_user = 110px → score = 100×(120-110)/100 = 10点
+        if u_user > 20 && u_user < 120 {
+            let score = 100.0 * (120.0 - u_user) / 100.0
+            return max(0, Int(score))
+        }
+        
+        // 4. 最低レベル: u_user ≤ -90px または u_user ≥ 120px
+        return 0
     }
 
     // MARK: - 8) リストワーク（回内外の合計角度）
@@ -476,25 +490,5 @@ enum MetricsCalculator {
     private static func lerp(from: Int, to: Int, x: Double) -> Int {
         let t = max(0.0, min(1.0, x))
         return Int(round(Double(from) + (Double(to - from) * t)))
-    }
-
-    /*
-    // ※現在は使用していません（単純平均に変更）
-    private static func weightedTotal(_ scores: [Double], weights: [Double]) -> Double {
-        guard scores.count == weights.count else { return 0 }
-        let s = zip(scores, weights).reduce(0.0) { $0 + ($1.0 * $1.1 / 100.0) }
-        return s
-    }
-    */
-}
-
-// --- Temporary stub for Phase 1 buildability ---
-import CoreGraphics
-
-extension CourtCalibration {
-    /// トス頂点の画素座標をコート平面(z=0)へ射影し、ベースラインからの前方距離[m]を返す
-    /// Phase 2で実装。本スタブは nil を返す。
-    func projectForwardDistanceToBaseline(pixelPoint: CGPoint) -> Double? {
-        return nil
     }
 }

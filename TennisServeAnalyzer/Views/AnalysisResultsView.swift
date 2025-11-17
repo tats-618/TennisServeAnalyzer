@@ -3,7 +3,7 @@
 //  TennisServeAnalyzer
 //
 //  Serve analysis results display with actionable feedback
-//  🔧 修正: セッション管理に対応
+//  🔧 修正: セッション管理に対応、トス位置表示を基準線ベースに変更
 //
 
 import SwiftUI
@@ -130,10 +130,9 @@ struct AnalysisResultsView: View {
                 metricRow(
                     title: "7. トスの位置",
                     score: metrics.score7_tossPosition,
-                    rawValue: String(format: "前方: %.2fm, 横: %.0fpx (%@)",
-                                     metrics.tossForwardDistanceM,
-                                     abs(metrics.tossOffsetFromCenterPx),
-                                     metrics.tossOffsetFromCenterPx >= 0 ? "右" : "左")
+                    rawValue: String(format: "基準線から %@%.0fpx",
+                                     metrics.tossOffsetFromBaselinePx >= 0 ? "+" : "",
+                                     metrics.tossOffsetFromBaselinePx)
                 )
                 
                 metricRow(
@@ -341,7 +340,7 @@ struct AnalysisResultsView: View {
             ),
             (
                 title: "トスの位置",
-                message: "前方0.2–0.6mを目安に。コートキャリブ後に再調整を。",
+                message: "基準線から10~20px後方（画面右）を目安に。前すぎても後ろすぎても減点です。",
                 score: metrics.score7_tossPosition
             ),
             (
@@ -367,7 +366,7 @@ struct AnalysisResultsView: View {
         bodyAxisDeviationDeg: 6.2,
         racketFaceYawDeg: 8.5,
         racketFacePitchDeg: 6.0,
-        tossForwardDistanceM: 0.35,
+        tossOffsetFromBaselinePx: 15.0,
         wristRotationDeg: 180.0,
         tossPositionX: 760.0,
         tossOffsetFromCenterPx: 120.0,
