@@ -1,10 +1,10 @@
-// ーーーーー IMU Only Impact Detection + Efficiency Analysis ーーーーー
+// ーーーーー IMU Only Impact Detection + Normalized Efficiency Analysis ーーーーー
 //
 //  ServeAnalyzer.swift
 //  TennisServeAnalyzer Watch App
 //
 //  🚀 Audio機能を全削除し、IMUの衝撃検知のみで実装
-//  📊 スイング効率分析（加速ピークタイミング診断）を追加
+//  📊 スイング効率分析: 構え(Start)〜インパクト(End)で正規化 (0.0~1.0)
 //  🎯 スイング速度(Gyro)と衝撃(Accel Jerk)を監視してインパクトを特定
 //
 
@@ -24,7 +24,7 @@ final class ServeAnalyzer: ObservableObject {
     // ステータス表示
     @Published var statusHeader: String = "⏸ Idle"
     @Published var statusDetail: String = "起動しました"
-    @Published var samplingStatus: String = "IMU 100Hz 設定済み"
+    @Published var samplingStatus: String = "IMU 200Hz 設定済み"
     @Published var connectionStatusText: String = "未接続"
 
     // キャリブ進行状態
@@ -43,6 +43,7 @@ final class ServeAnalyzer: ObservableObject {
 
     // IMU
     private let motionManager = CMMotionManager()
+    // 分析精度向上のため 200Hz に設定
     private let imuHz: Double = 200.0
     private var lastLogTimestamp: TimeInterval = 0
 
@@ -60,7 +61,10 @@ final class ServeAnalyzer: ObservableObject {
         let userAccelMag: Double // ユーザー加速度の大きさ (G)
     }
     private var attBuffer: [AttSample] = []
-    private let attBufferMax = 200 // 2秒分保持
+    
+    // 3秒前まで遡って「構え」を探すため、バッファサイズを確保
+    // 200Hz * 4.0秒 = 800サンプル
+    private let attBufferMax = 800
 
     // 時間変換用
     private var timebaseInfo = mach_timebase_info_data_t()
@@ -68,20 +72,20 @@ final class ServeAnalyzer: ObservableObject {
 
     // MARK: - Impact Detection Logic (IMU Based)
     
-    // デバウンス
+    // デバウンス (2度打ち防止)
     private let hitDebounceTime: TimeInterval = 1.0
     private var lastHitTime: TimeInterval = 0
     
     // 閾値設定
-    private let swingGateThreshold: Double = 5.0  // rad/s
-    private let impactShockThreshold: Double = 4.0 // G
+    private let swingGateThreshold: Double = 5.0  // rad/s (これ以下の速度なら無視)
+    private let impactShockThreshold: Double = 4.0 // G (衝撃検知のしきい値)
     
     // 前回の加速度（変化量計算用）
     private var lastUserAccelMag: Double = 0.0
 
     // MARK: - Init
     init() {
-        print("⌚ ServeAnalyzer init (IMU Impact + Efficiency Analysis)")
+        print("⌚ ServeAnalyzer init (IMU Impact + Normalized Analysis)")
         connectionStatusText = (watchManager.session?.isReachable ?? false) ? "iPhone接続" : "未接続"
         startStatusTimer()
     }
@@ -192,12 +196,13 @@ final class ServeAnalyzer: ObservableObject {
             detectImpactFromMotion(t: t, gyroMag: gyroMag, userAccelMag: userAccelMag)
             
             // リアルタイムログ出力（間引き）
-            if t - lastLogTimestamp > 0.01 {
+            // 0.005秒 = 5ms = 200Hz (実質全データ出力)
+            if t - lastLogTimestamp > 0.005 {
                 lastLogTimestamp = t
                 let tMs = Int64(t * 1000)
                 if let angles = calculateFaceAngles(from: R) {
                     let deltaAccel = abs(userAccelMag - lastUserAccelMag)
-                    print(String(format: "%lldms | Gyro:%.1f | Acc:%.1f | ΔAcc:%.1f | R:%.1f P:%.1f",
+                    print(String(format: "%lldms | スイング速度:%.1f | 加速度（G）:%.1f | 衝撃:%.1f | 左右:%.1f 上下:%.1f",
                                  tMs, gyroMag, userAccelMag, deltaAccel, angles.roll, angles.pitch))
                 }
             }
@@ -208,9 +213,11 @@ final class ServeAnalyzer: ObservableObject {
     
     /// 衝撃検知によるヒット判定
     private func detectImpactFromMotion(t: TimeInterval, gyroMag: Double, userAccelMag: Double) {
+        // デバウンスとゲートチェック
         if t - lastHitTime < hitDebounceTime { return }
         if gyroMag < swingGateThreshold { return }
         
+        // 加速度の変化量(Jerk)
         let deltaAccel = abs(userAccelMag - lastUserAccelMag)
         
         if deltaAccel > impactShockThreshold {
@@ -233,10 +240,10 @@ final class ServeAnalyzer: ObservableObject {
                 let bestMs = Int64(bestSample.t * 1000)
                 
                 print("\n🔥🔥🔥 IMPACT DETECTED (IMU) 🔥🔥🔥")
-                print(String(format: "🎯 HIT @ %lldms (Trig:%lld) | Gyro=%.1f | 左右=%.1f°, 上下=%.1f°",
-                             bestMs, triggerMs, bestSample.gyroMag, angles.roll, angles.pitch))
+                print(String(format: "🎯 HIT @ %lldms (Trig:%lld) | Gyro=%.1f | ΔAcc=%.1f | 左右=%.1f°, 上下=%.1f°",
+                             bestMs, triggerMs, bestSample.gyroMag, deltaAccel, angles.roll, angles.pitch))
                 
-                // ★ここでスイング効率分析を実行・表示
+                // ★ここでスイング効率分析(正規化スコア)を実行・表示
                 analyzeSwingEfficiency(atHitTime: bestSample.t)
                 
                 print("--------------------------------------\n")
@@ -261,53 +268,88 @@ final class ServeAnalyzer: ObservableObject {
         return attBuffer.min(by: { abs($0.t - targetTime) < abs($1.t - targetTime) })
     }
 
-    // MARK: - ★ Swing Efficiency Analysis Logic (Added)
+    // MARK: - ★ Swing Efficiency Analysis Logic (Normalized v2)
     
-    /// スイング効率の分析：インパクト前のピーク加速タイミングを特定してログ出力
+    /// 新定義に基づくスイング分析
+    /// Start: インパクト2~3秒前の静止(Gyro<0.1)
+    /// End: インパクト (t_impact)
+    /// r = (t_peak - t_start) / (t_end - t_start)
+    /// 理想は r が 1.0 に近いこと（インパクト直前まで加速）
     private func analyzeSwingEfficiency(atHitTime: TimeInterval) {
-        // 検索範囲: インパクト前 200ms 〜 0ms
-        let searchWindow = 0.2 // 200ms
         
-        var maxAccel: Double = 0
-        var maxAccelTimeDiff: Double = 0
+        // 1. 終了時刻 (t_end) = インパクト時刻そのもの
+        let endTime = atHitTime
+        
+        // 2. 開始時刻 (t_start) を探す
+        // 検索範囲: インパクトの [3.0秒前 〜 2.0秒前] の間
+        let searchStartWindow = atHitTime - 3.0
+        let searchEndWindow   = atHitTime - 2.0
+        
+        var startTime = atHitTime - 2.5 // デフォルト値
+        
+        // 古い順に見て、条件(角速度<=0.1)を満たす最後の点を採用
+        let staticSamples = attBuffer.filter {
+            $0.t >= searchStartWindow && $0.t <= searchEndWindow && $0.gyroMag <= 0.1
+        }
+        
+        if let lastStatic = staticSamples.last {
+            startTime = lastStatic.t
+        }
+        
+        // 3. ピーク加速時刻 (t_peak) を探す
+        // 検索範囲: 開始(t_start) 〜 インパクト(t_impact) の間
+        var peakTime = startTime
+        var maxAccel: Double = 0.0
         var prevSample: AttSample? = nil
         
-        // バッファを走査して、指定範囲内の最大角加速度を探す
         for sample in attBuffer {
-            let diffSec = sample.t - atHitTime
+            if sample.t < startTime { continue }
+            if sample.t > atHitTime { break }
             
-            // インパクト前 (-200ms ~ -5ms) の範囲のみ対象
-            if diffSec >= -searchWindow && diffSec < -0.005 {
-                if let prev = prevSample {
-                    let dt = sample.t - prev.t
-                    if dt > 0 {
-                        let dGyro = sample.gyroMag - prev.gyroMag
-                        let accel = dGyro / dt // 角加速度 (rad/s^2)
-                        
-                        if accel > maxAccel {
-                            maxAccel = accel
-                            maxAccelTimeDiff = diffSec
-                        }
+            if let prev = prevSample {
+                let dt = sample.t - prev.t
+                if dt > 0 {
+                    // 角加速度 (rad/s^2)
+                    let accel = (sample.gyroMag - prev.gyroMag) / dt
+                    if accel > maxAccel {
+                        maxAccel = accel
+                        peakTime = sample.t
                     }
                 }
             }
             prevSample = sample
         }
         
-        let diffMs = Int(maxAccelTimeDiff * 1000)
+        // 4. 正規化計算 (r)
+        let totalDuration = endTime - startTime
+        let peakDuration = peakTime - startTime
         
-        print("🚀 --- Swing Efficiency Analysis ---")
-        print(String(format: "⚡ Peak Acceleration: %.1f rad/s²", maxAccel))
-        print(String(format: "⏱ Timing: %d ms before impact", abs(diffMs)))
-        
-        // 評価
-        if diffMs > -30 {
-            print("💎 Evaluation: EXCELLENT (インパクト直前の最大加速)")
-        } else if diffMs > -80 {
-            print("✅ Evaluation: GOOD (標準的な加速タイミング)")
-        } else {
-            print("⚠️ Evaluation: EARLY (加速が早い・手打ちの可能性)")
+        var r: Double = 0.0
+        if totalDuration > 0 {
+            r = peakDuration / totalDuration
         }
+        
+        // 5. ログ出力と評価
+        // 分母が「構え〜インパクト」になったので、理想値は 1.0 に近くなる
+        
+        print("🚀 --- Swing Analysis (Normalized 0-1) ---")
+        print(String(format: "⏱ Duration: %.2fs (Start to Impact)", totalDuration))
+        print(String(format: "⚡ Peak Accel: %.1f rad/s²", maxAccel))
+        print(String(format: "📍 Peak Position (r): %.3f", r))
+        
+        var evaluation = ""
+        if r >= 0.90 && r <= 1.0 {
+            // インパクト直前(ラスト10%)でピーク
+            evaluation = "💎 Excellent (インパクト直前の最大加速)"
+        } else if r >= 0.75 {
+            // 75%以降でピーク (悪くはない)
+            evaluation = "✅ Good (標準的な加速)"
+        } else {
+            // 前半でピーク (手打ち・振り遅れ)
+            evaluation = "⚠️ Early Peak (加速が早い)"
+        }
+        
+        print("📝 Eval: \(evaluation)")
     }
 
     private func stopIMU() {
