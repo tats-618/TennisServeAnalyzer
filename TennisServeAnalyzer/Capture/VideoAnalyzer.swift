@@ -93,7 +93,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
     // Configuration
     private let maxSessionDuration: TimeInterval = 60.0
     private let poseDetectionInterval: Int = 5        // 姿勢: 5フレームごと
-    private let ballDetectionInterval: Int = 1       // ボール: 毎フレーム
+    private let ballDetectionInterval: Int = 4       // ボール: 毎フレーム
     
     // パフォーマンス測定
     private var actualBallDetections: Int = 0

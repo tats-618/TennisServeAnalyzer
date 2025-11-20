@@ -260,17 +260,17 @@ enum MetricsCalculator {
 
     private static func scorePelvisRise(_ pixels: Double) -> Int {
         // 🔧 設計書準拠: ピクセルベースの基準値
-        // - 理想範囲 60~70 px → 100点
-        // - 不足 0~59.9 px → (100×ΔY)/60
+        // - 理想範囲 50~60 px → 100点
+        // - 不足 0~49.9 px → (100×ΔY)/50
         
-        if (60...70).contains(pixels) {
+        if pixels >= 50.0 {
             return 100
-        } else if pixels < 60 {
-            // 不足（膝が使えていない）
-            return Int(100.0 * pixels / 60.0)
-        } else {
-            // 70pxを超える場合も100点とする
-            return 100
+        }
+        // 2. 不足（0 ~ 49.9 px）
+        else {
+            // 計算式: (100 × ΔY) / 50
+            let score = 100.0 * pixels / 50.0
+            return max(0, Int(score))
         }
     }
 
@@ -399,64 +399,36 @@ enum MetricsCalculator {
         
         // トスのx座標を取得
         let tossX = Double(apex.position.x)
-        
-        // 🔧 修正: 基準線からのオフセット (u_user)
-        // 座標系の定義:
-        //   正の値 = 基準線より前（画面右側、ネット側）
-        //   負の値 = 基準線より後ろ（画面左側、身体側）
-        //
-        // 例: tossX=432px, baselineX=360px
-        //     → offset = +72px（基準線より72px前方＝ネット側）
         let offsetFromBaseline = tossX - baselineX
-        
-        // 画面中央からの距離を計算（参考値として保持）
-        // 注: imageSize情報がBallDetectionに含まれていない場合は0とする
         let offsetFromCenter = 0.0 // TODO: 必要に応じてimageSize情報を渡す
-        
         return (offsetFromBaseline, tossX, offsetFromCenter, nil)
     }
 
     private static func scoreTossPosition(_ u_user: Double) -> Int {
-        // 🔧 設計書準拠: 基準線からのオフセット評価
-        //
-        // 座標系の定義:
-        //   u_user: 基準線からのずれ（px）
-        //   正の値 = 前（ネット側）
-        //   負の値 = 後ろ（身体側）
-        
-        // 1. 理想範囲: 10px~20px（基準線より少し前）
-        if (10...20).contains(u_user) {
+
+    // 1. 理想範囲: 46px ~ 57px
+        if u_user >= 46 && u_user <= 57 {
             return 100
         }
-        
-        // 2. 後ろすぎ: -89.9px ~ 9.9px（理想範囲の下限より小さい）
-        // 範囲: -90 < u_user < 10（境界を含まない）
-        // スコア = 100 × (u_user + 90) / 100
-        //
-        // 例: u_user = -45px → score = 100×(-45+90)/100 = 45点
-        //     u_user = 0px   → score = 100×(0+90)/100 = 90点
-        //     u_user = 9px   → score = 100×(9+90)/100 = 99点
-        if u_user > -90 && u_user < 10 {
-            let score = 100.0 * (u_user + 90.0) / 100.0
+        // 2. 後ろすぎ: -54px < u_user < 46px
+        // 条件: 46px > u_user
+        // スコア式: 100 × (u_user + 54) / 100
+        if u_user > -54 && u_user < 46 {
+            let score = 100.0 * (u_user + 54.0) / 100.0
             return max(0, Int(score))
         }
-        
-        // 3. 前すぎ: 20.1px ~ 119.9px（理想範囲の上限より大きい）
-        // 範囲: 20 < u_user < 120（境界を含まない）
-        // スコア = 100 × (120 - u_user) / 100
-        //
-        // 例: u_user = 30px  → score = 100×(120-30)/100 = 90点
-        //     u_user = 70px  → score = 100×(120-70)/100 = 50点
-        //     u_user = 110px → score = 100×(120-110)/100 = 10点
-        if u_user > 20 && u_user < 120 {
-            let score = 100.0 * (120.0 - u_user) / 100.0
+                // 3. 前すぎ: 57px < u_user < 157px
+                // 条件: u_user > 57px
+                // スコア式: 100 × (157 - u_user) / 100
+        if u_user > 57 && u_user < 157 {
+            let score = 100.0 * (157.0 - u_user) / 100.0
             return max(0, Int(score))
         }
-        
-        // 4. 最低レベル: u_user ≤ -90px または u_user ≥ 120px
+                // 4. 最低レベル (範囲外)
+                // 条件: -54px > u_user or u_user > +157px
         return 0
     }
-
+    
     // MARK: - 8) リストワーク（回内外の合計角度）
     private static func estimateWristRotationDeg(
         imuHistory: [ServeSample],
