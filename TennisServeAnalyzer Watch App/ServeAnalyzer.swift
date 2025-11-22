@@ -36,14 +36,20 @@ final class ServeAnalyzer: ObservableObject {
     // 面角表示
     @Published var lastFaceYawDeg: Float = 0.0     // Roll
     @Published var lastFacePitchDeg: Float = 0.0   // Pitch
+    
+    // UI側での参照エラーを防ぐため変数は残すが、更新はしない
     @Published var lastFaceAdvice: String = ""
+
+    // ★ Peak Position (r) 表示用
+    @Published var lastPeakPositionR: Double = 0.0
+    // UI側での参照エラーを防ぐため変数は残すが、更新はしない
+    @Published var lastPeakEvalText: String = ""
 
     // MARK: - Internals
     private let watchManager = WatchConnectivityManager.shared
 
     // IMU
     private let motionManager = CMMotionManager()
-    // 分析精度向上のため 200Hz に設定
     private let imuHz: Double = 200.0
     private var lastLogTimestamp: TimeInterval = 0
 
@@ -72,13 +78,13 @@ final class ServeAnalyzer: ObservableObject {
 
     // MARK: - Impact Detection Logic (IMU Based)
     
-    // デバウンス (2度打ち防止)
+    // デバウンス
     private let hitDebounceTime: TimeInterval = 1.0
     private var lastHitTime: TimeInterval = 0
     
     // 閾値設定
-    private let swingGateThreshold: Double = 5.0  // rad/s (これ以下の速度なら無視)
-    private let impactShockThreshold: Double = 4.0 // G (衝撃検知のしきい値)
+    private let swingGateThreshold: Double = 3.0  // rad/s
+    private let impactShockThreshold: Double = 2.0 // G
     
     // 前回の加速度（変化量計算用）
     private var lastUserAccelMag: Double = 0.0
@@ -133,6 +139,9 @@ final class ServeAnalyzer: ObservableObject {
         lastFaceYawDeg = 0
         lastFacePitchDeg = 0
         lastFaceAdvice = ""
+        // ★ Peak Position 初期化
+        lastPeakPositionR = 0.0
+        lastPeakEvalText = ""
 
         isRecording = true
         collectionState = DataCollectionState.collecting
@@ -213,11 +222,17 @@ final class ServeAnalyzer: ObservableObject {
     
     /// 衝撃検知によるヒット判定
     private func detectImpactFromMotion(t: TimeInterval, gyroMag: Double, userAccelMag: Double) {
-        // デバウンスとゲートチェック
         if t - lastHitTime < hitDebounceTime { return }
-        if gyroMag < swingGateThreshold { return }
         
-        // 加速度の変化量(Jerk)
+        // 「直近0.2秒間の最大スイング速度」を確認する
+        let lookBackWindow = 0.2
+        let maxRecentGyro = attBuffer
+            .filter { $0.t >= t - lookBackWindow }
+            .map { $0.gyroMag }
+            .max() ?? gyroMag
+        
+        if maxRecentGyro < swingGateThreshold { return }
+        
         let deltaAccel = abs(userAccelMag - lastUserAccelMag)
         
         if deltaAccel > impactShockThreshold {
@@ -227,12 +242,12 @@ final class ServeAnalyzer: ObservableObject {
             if let bestSample = findBestImpactSample(triggerTime: t),
                let angles = calculateFaceAngles(from: bestSample.R) {
                 
-                let advice = advise(rollDeg: angles.roll, pitchDeg: angles.pitch)
+                // アドバイス生成は削除
                 
                 DispatchQueue.main.async { [weak self] in
                     self?.lastFaceYawDeg = angles.roll
                     self?.lastFacePitchDeg = angles.pitch
-                    self?.lastFaceAdvice = advice
+                    // アドバイス更新削除
                     WKInterfaceDevice.current().play(.success)
                 }
                 
@@ -240,10 +255,9 @@ final class ServeAnalyzer: ObservableObject {
                 let bestMs = Int64(bestSample.t * 1000)
                 
                 print("\n🔥🔥🔥 IMPACT DETECTED (IMU) 🔥🔥🔥")
-                print(String(format: "🎯 HIT @ %lldms (Trig:%lld) | Gyro=%.1f | ΔAcc=%.1f | 左右=%.1f°, 上下=%.1f°",
-                             bestMs, triggerMs, bestSample.gyroMag, deltaAccel, angles.roll, angles.pitch))
+                print(String(format: "🎯 HIT @ %lldms (Trig:%lld) | Gyro=%.1f (MaxRecent:%.1f) | ΔAcc=%.1f | 左右=%.1f°, 上下=%.1f°",
+                             bestMs, triggerMs, bestSample.gyroMag, maxRecentGyro, deltaAccel, angles.roll, angles.pitch))
                 
-                // ★ここでスイング効率分析(正規化スコア)を実行・表示
                 analyzeSwingEfficiency(atHitTime: bestSample.t)
                 
                 print("--------------------------------------\n")
@@ -269,25 +283,15 @@ final class ServeAnalyzer: ObservableObject {
     }
 
     // MARK: - ★ Swing Efficiency Analysis Logic (Normalized v2)
-    
-    /// 新定義に基づくスイング分析
-    /// Start: インパクト2~3秒前の静止(Gyro<0.1)
-    /// End: インパクト (t_impact)
-    /// r = (t_peak - t_start) / (t_end - t_start)
-    /// 理想は r が 1.0 に近いこと（インパクト直前まで加速）
     private func analyzeSwingEfficiency(atHitTime: TimeInterval) {
         
-        // 1. 終了時刻 (t_end) = インパクト時刻そのもの
         let endTime = atHitTime
         
-        // 2. 開始時刻 (t_start) を探す
-        // 検索範囲: インパクトの [3.0秒前 〜 2.0秒前] の間
         let searchStartWindow = atHitTime - 3.0
         let searchEndWindow   = atHitTime - 2.0
         
-        var startTime = atHitTime - 2.5 // デフォルト値
+        var startTime = atHitTime - 2.5
         
-        // 古い順に見て、条件(角速度<=0.1)を満たす最後の点を採用
         let staticSamples = attBuffer.filter {
             $0.t >= searchStartWindow && $0.t <= searchEndWindow && $0.gyroMag <= 0.1
         }
@@ -296,8 +300,6 @@ final class ServeAnalyzer: ObservableObject {
             startTime = lastStatic.t
         }
         
-        // 3. ピーク加速時刻 (t_peak) を探す
-        // 検索範囲: 開始(t_start) 〜 インパクト(t_impact) の間
         var peakTime = startTime
         var maxAccel: Double = 0.0
         var prevSample: AttSample? = nil
@@ -309,7 +311,6 @@ final class ServeAnalyzer: ObservableObject {
             if let prev = prevSample {
                 let dt = sample.t - prev.t
                 if dt > 0 {
-                    // 角加速度 (rad/s^2)
                     let accel = (sample.gyroMag - prev.gyroMag) / dt
                     if accel > maxAccel {
                         maxAccel = accel
@@ -320,7 +321,6 @@ final class ServeAnalyzer: ObservableObject {
             prevSample = sample
         }
         
-        // 4. 正規化計算 (r)
         let totalDuration = endTime - startTime
         let peakDuration = peakTime - startTime
         
@@ -329,27 +329,18 @@ final class ServeAnalyzer: ObservableObject {
             r = peakDuration / totalDuration
         }
         
-        // 5. ログ出力と評価
-        // 分母が「構え〜インパクト」になったので、理想値は 1.0 に近くなる
-        
         print("🚀 --- Swing Analysis (Normalized 0-1) ---")
         print(String(format: "⏱ Duration: %.2fs (Start to Impact)", totalDuration))
         print(String(format: "⚡ Peak Accel: %.1f rad/s²", maxAccel))
         print(String(format: "📍 Peak Position (r): %.3f", r))
         
-        var evaluation = ""
-        if r >= 0.90 && r <= 1.0 {
-            // インパクト直前(ラスト10%)でピーク
-            evaluation = "💎 Excellent (インパクト直前の最大加速)"
-        } else if r >= 0.75 {
-            // 75%以降でピーク (悪くはない)
-            evaluation = "✅ Good (標準的な加速)"
-        } else {
-            // 前半でピーク (手打ち・振り遅れ)
-            evaluation = "⚠️ Early Peak (加速が早い)"
+        // 評価テキスト生成ロジックは削除
+
+        // ★ UI へ反映
+        DispatchQueue.main.async { [weak self] in
+            self?.lastPeakPositionR = r
+            // 評価テキスト更新削除
         }
-        
-        print("📝 Eval: \(evaluation)")
     }
 
     private func stopIMU() {
@@ -455,15 +446,6 @@ final class ServeAnalyzer: ObservableObject {
         return (rollRad * 180.0 / .pi, pitch)
     }
 
-    // MARK: - Threshold advice
-    private func advise(rollDeg: Float, pitchDeg: Float) -> String {
-        var msgs: [String] = []
-        if abs(rollDeg) > 5 { msgs.append("面を真っ直ぐ向けましょう") }
-        if pitchDeg < -70 || pitchDeg < -20 { msgs.append("面が下向き(ネット注意)") }
-        else if pitchDeg > 50 || pitchDeg > 0 { msgs.append("面が上向き(アウト注意)") }
-        return msgs.isEmpty ? "Good Shot!" : msgs.joined(separator: "/")
-    }
-
     // MARK: - Helpers
     private func attitudeToR(_ att: CMAttitude) -> simd_float3x3 {
         let m = att.rotationMatrix
@@ -483,7 +465,11 @@ final class ServeAnalyzer: ObservableObject {
         hasLevelCalib = false
         hasDirCalib = false
         calibStage = .idle
-        lastFaceYawDeg = 0; lastFacePitchDeg = 0; lastFaceAdvice = ""
+        lastFaceYawDeg = 0
+        lastFacePitchDeg = 0
+        lastFaceAdvice = ""
+        lastPeakPositionR = 0.0
+        lastPeakEvalText = ""
         statusHeader = "⏸ Idle"
         statusDetail = "リセット完了"
         collectionState = .idle

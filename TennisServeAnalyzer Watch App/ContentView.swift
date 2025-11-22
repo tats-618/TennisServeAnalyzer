@@ -119,6 +119,19 @@ struct ContentView: View {
                 Text(String(format: "面角 yaw %.1f° / pitch %.1f°",
                             analyzer.lastFaceYawDeg, analyzer.lastFacePitchDeg))
                     .font(.system(size: 11)).foregroundColor(.white)
+
+                // ★ Peak Position (r) 表示
+                Text(String(format: "Peak Position r = %.3f", analyzer.lastPeakPositionR))
+                    .font(.system(size: 11))
+                    .foregroundColor(.cyan)
+
+                // ★ 評価コメントも表示（必要なければこのブロックは削ってOK）
+                if !analyzer.lastPeakEvalText.isEmpty {
+                    Text(analyzer.lastPeakEvalText)
+                        .font(.system(size: 11))
+                        .foregroundColor(.yellow)
+                }
+
                 if !analyzer.lastFaceAdvice.isEmpty {
                     Text(analyzer.lastFaceAdvice)
                         .font(.system(size: 11, weight: .semibold))

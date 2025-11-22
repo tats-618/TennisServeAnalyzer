@@ -62,7 +62,8 @@ struct PoseData {
 class PoseDetector {
     // MARK: Properties
     private let poseRequest: VNDetectHumanBodyPoseRequest
-    
+    private let sequenceHandler = VNSequenceRequestHandler()
+
     // Configuration
     private let minimumConfidence: Float = 0.3
     
@@ -88,16 +89,13 @@ class PoseDetector {
         
         // Get orientation from sample buffer
         let orientation = getImageOrientation(from: sampleBuffer)
-        
-        // Create request handler with correct orientation
-        let handler = VNImageRequestHandler(
-            cvPixelBuffer: pixelBuffer,
-            orientation: orientation,
-            options: [:]
-        )
-        
+
         do {
-            try handler.perform([poseRequest])
+            try sequenceHandler.perform(
+                [poseRequest],
+                on: pixelBuffer,
+                orientation: orientation
+            )
             
             guard let observation = poseRequest.results?.first else {
                 return nil

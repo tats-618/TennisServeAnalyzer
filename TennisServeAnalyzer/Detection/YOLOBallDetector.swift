@@ -27,6 +27,7 @@ class YOLOBallDetector {
     // MARK: - Model & switches
     private var visionModel: VNCoreMLModel?
     private var usingFineTuned: Bool = false
+    private let sequenceHandler = VNSequenceRequestHandler()
 
     // Thresholds
     private var highConfidence: Float = 0.80
@@ -130,10 +131,13 @@ class YOLOBallDetector {
         let oriNum = CMGetAttachment(sampleBuffer, key: kCGImagePropertyOrientation, attachmentModeOut: nil) as? NSNumber
         let cgOrientation = oriNum.flatMap { CGImagePropertyOrientation(rawValue: $0.uint32Value) } ?? .right
 
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: cgOrientation, options: [:])
-
         do {
-            try handler.perform([req])
+            try sequenceHandler.perform(
+                [req],
+                on: pixelBuffer,
+                orientation: cgOrientation
+            )
+            
             if let det = processResults(
                 req.results,
                 pixelBuffer: pixelBuffer,
