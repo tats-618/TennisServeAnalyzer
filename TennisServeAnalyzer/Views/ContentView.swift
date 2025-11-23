@@ -250,25 +250,6 @@ struct ContentView: View {
                 CameraPreviewView(videoAnalyzer: videoAnalyzer)
                     .edgesIgnoringSafeArea(.all)
                 
-                // Pose overlay with trophy angles
-                if let pose = videoAnalyzer.detectedPose {
-                    PoseOverlayView(
-                        pose: pose,
-                        viewSize: geometry.size,
-                        trophyPoseDetected: videoAnalyzer.trophyPoseDetected,
-                        trophyAngles: videoAnalyzer.trophyAngles,
-                        pelvisPosition: videoAnalyzer.pelvisPosition
-                    )
-                }
-                
-                // Ball overlay
-                if let ball = videoAnalyzer.detectedBall {
-                    BallOverlayView(
-                        ball: ball,
-                        viewSize: geometry.size
-                    )
-                }
-                
                 // Status overlay
                 VStack {
                     StatusIndicatorView(
