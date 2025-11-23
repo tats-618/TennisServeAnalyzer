@@ -3,6 +3,7 @@
 //  TennisServeAnalyzer Watch App
 //
 //  Handles communication with iPhone
+//  🔧 修正: NTP同期リクエストを最優先で処理し、デフォルトレスポンスへのフォールスルーを防止
 //
 
 import WatchConnectivity
@@ -206,7 +207,10 @@ extension WatchConnectivityManager: WCSessionDelegate {
     func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         print("📨 Received message with reply handler from iPhone")
         
-        // NTP同期リクエストの処理
+        // ---------------------------------------------------------
+        // 🚨 CRITICAL FIX: NTP同期リクエストを最優先で処理
+        // ここで処理したら必ず return して、下のデフォルト処理に行かせないこと
+        // ---------------------------------------------------------
         if let t1 = message["ntpSyncT1"] as? Double {
             let t2 = ProcessInfo.processInfo.systemUptime  // Watch受信時刻
             
@@ -224,7 +228,7 @@ extension WatchConnectivityManager: WCSessionDelegate {
             print("   t1 (echoed): \(String(format: "%.6f", t1))")
             print("   t2 (recv): \(String(format: "%.6f", t2))")
             print("   t3 (send): \(String(format: "%.6f", t3))")
-            return
+            return // 🚨 CRITICAL: Must return here to prevent fall-through
         }
         
         // Handle commands with reply
@@ -250,7 +254,7 @@ extension WatchConnectivityManager: WCSessionDelegate {
             print("⏱ Received time sync from iPhone")
         }
         
-        // Default reply
+        // Default reply (NTP以外の場合のみ返す)
         replyHandler(["status": "ok"])
     }
 }

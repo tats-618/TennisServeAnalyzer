@@ -4,7 +4,7 @@
 //
 //  Main view with camera setup flow
 //  🔧 修正: セッション管理に対応
-//  🆕 NTP時刻同期を画面表示時に先行実行
+//  🆕 NTP時刻同期を画面表示時に先行実行（競合状態解決版）
 //
 
 import SwiftUI
@@ -14,8 +14,8 @@ import WatchConnectivity
 struct ContentView: View {
     @StateObject private var videoAnalyzer = VideoAnalyzer()
     
-    // 🆕 Watch接続マネージャーへの参照
-    private let watchManager = WatchConnectivityManager.shared
+    // 🆕 Watch接続マネージャーへの参照（ObservableObject対応）
+    @ObservedObject private var watchManager = WatchConnectivityManager.shared
     private let syncCoordinator = SyncCoordinator.shared
     
     var body: some View {
@@ -66,27 +66,52 @@ struct ContentView: View {
         .onAppear {
             print("📱 ContentView appeared")
             
-            // 🆕 Watch接続時に先行してNTP同期を実行
-            if WCSession.default.isReachable {
-                print("⏳ Pre-syncing NTP with Watch...")
-                
-                syncCoordinator.performNTPSync(
-                    sendMessageHandler: { request, completion in
-                        watchManager.sendNTPSyncRequest(request, completion: completion)
-                    },
-                    completion: { success in
-                        if success {
-                            print("✅ Pre-sync complete")
-                            print("   Offset: \(String(format: "%.3f", syncCoordinator.timeOffset * 1000))ms")
-                            print("   Quality: \(String(format: "%.1f", syncCoordinator.syncQuality * 1000))ms RTT")
-                        } else {
-                            print("⚠️ Pre-sync failed, will retry during recording")
-                        }
-                    }
-                )
+            // 🆕 既に接続済みの場合の念のための処理（サブトリガー）
+            if watchManager.isWatchReachable {
+                print("📡 Watch already reachable on appear, scheduling pre-sync...")
+                scheduleNTPPreSync()
             } else {
-                print("⚠️ Watch not reachable, skipping pre-sync")
+                print("⏳ Waiting for Watch connection...")
             }
+        }
+        .onChange(of: watchManager.isWatchReachable) { isReachable in
+            // 🆕 Watch接続状態の変化を検知
+            if isReachable {
+                print("📡 Watch became reachable, scheduling pre-sync...")
+                scheduleNTPPreSync()
+            } else {
+                print("📡 Watch became unreachable")
+            }
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    /// 🆕 NTP先行同期をスケジュール（接続安定化のため0.5秒遅延）
+    private func scheduleNTPPreSync() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // 再度接続状態を確認（遅延中に切断された場合のガード）
+            guard watchManager.isWatchReachable else {
+                print("⚠️ Watch disconnected before pre-sync, skipping...")
+                return
+            }
+            
+            print("⏳ Pre-syncing NTP with Watch...")
+            
+            syncCoordinator.performNTPSync(
+                sendMessageHandler: { request, completion in
+                    watchManager.sendNTPSyncRequest(request, completion: completion)
+                },
+                completion: { success in
+                    if success {
+                        print("✅ Pre-sync complete")
+                        print("   Offset: \(String(format: "%.3f", syncCoordinator.timeOffset * 1000))ms")
+                        print("   Quality: \(String(format: "%.1f", syncCoordinator.syncQuality * 1000))ms RTT")
+                    } else {
+                        print("⚠️ Pre-sync failed, will retry during recording")
+                    }
+                }
+            )
         }
     }
     
