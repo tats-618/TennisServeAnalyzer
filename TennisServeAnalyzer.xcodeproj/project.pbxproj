@@ -14,6 +14,7 @@
 		F97187022DE710EE00E9A9EF /* WatchConnectivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F97187012DE710EE00E9A9EF /* WatchConnectivity.framework */; };
 		F97F45752DE55EFF001166C6 /* TennisServeAnalyzer Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = F97F45742DE55EFF001166C6 /* TennisServeAnalyzer Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		F97F458A2DE55F4C001166C6 /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F97F45892DE55F4C001166C6 /* CoreMotion.framework */; };
+		F984F8092ED332480081B9CF /* HealthKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F984F8082ED332480081B9CF /* HealthKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -49,6 +50,7 @@
 		F97F45672DE55EFE001166C6 /* TennisServeAnalyzer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TennisServeAnalyzer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F97F45742DE55EFF001166C6 /* TennisServeAnalyzer Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "TennisServeAnalyzer Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F97F45892DE55F4C001166C6 /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.4.sdk/System/Library/Frameworks/CoreMotion.framework; sourceTree = DEVELOPER_DIR; };
+		F984F8082ED332480081B9CF /* HealthKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = HealthKit.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS11.4.sdk/System/Library/Frameworks/HealthKit.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -97,6 +99,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F984F8092ED332480081B9CF /* HealthKit.framework in Frameworks */,
 				F97187022DE710EE00E9A9EF /* WatchConnectivity.framework in Frameworks */,
 				F97186EF2DE7052900E9A9EF /* CoreMotion.framework in Frameworks */,
 			);
@@ -138,6 +141,7 @@
 		F97F45882DE55F4B001166C6 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				F984F8082ED332480081B9CF /* HealthKit.framework */,
 				F97186FF2DE710E600E9A9EF /* WatchConnectivity.framework */,
 				F97187012DE710EE00E9A9EF /* WatchConnectivity.framework */,
 				F97186EE2DE7052900E9A9EF /* CoreMotion.framework */,
@@ -398,12 +402,17 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "TennisServeAnalyzer Watch App/TennisServeAnalyzer Watch AppDebug.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 8WBSW3R9U9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "TennisServeAnalyzer-Watch-App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = TennisServeAnalyzer;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "ワークアウト中の心拍数や活動データを記録・分析するために使用します。";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "ワークアウトデータをHealthKitに保存するために使用します。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "打球音解析のためマイクを使用します";
 				INFOPLIST_KEY_NSMotionUsageDescription = "This app uses motion sensors to analyze tennis serve movements";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
@@ -415,6 +424,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tatsuki.tennisserve.ios.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -434,7 +444,10 @@
 				DEVELOPMENT_TEAM = 8WBSW3R9U9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "TennisServeAnalyzer-Watch-App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = TennisServeAnalyzer;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "ワークアウト中の心拍数や活動データを記録・分析するために使用します。";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "ワークアウトデータをHealthKitに保存するために使用します。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "打球音解析のためマイクを使用します";
 				INFOPLIST_KEY_NSMotionUsageDescription = "This app uses motion sensors to analyze tennis serve movements";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";

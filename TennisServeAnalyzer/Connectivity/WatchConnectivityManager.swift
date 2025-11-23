@@ -106,7 +106,7 @@ class WatchConnectivityManager: NSObject, ObservableObject {
     }
     
     // MARK: - NTP Time Sync
-    
+
     /// NTP方式の時刻同期を開始
     func startNTPSync(completion: @escaping (Bool) -> Void) {
         guard let session = session, session.isReachable else {
@@ -159,6 +159,52 @@ class WatchConnectivityManager: NSObject, ObservableObject {
                 responseHandler(nil)
             }
         }, completion: completion)
+    }
+
+    /// 🆕 NTP同期リクエストを送信（SyncCoordinator用ヘルパー）
+    func sendNTPSyncRequest(_ request: NTPSyncRequest, completion: @escaping (NTPSyncResponse?) -> Void) {
+        guard let session = session, session.isReachable else {
+            print("❌ Watch not reachable for NTP sync request")
+            completion(nil)
+            return
+        }
+        
+        let message: [String: Any] = [
+            "type": "ntp_sync",
+            "t1": request.t1
+        ]
+        
+        // タイムアウト処理
+        var didRespond = false
+        let timeoutItem = DispatchWorkItem {
+            if !didRespond {
+                print("⚠️ NTP sync request timeout")
+                completion(nil)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: timeoutItem)
+        
+        session.sendMessage(message, replyHandler: { reply in
+            guard !didRespond else { return }
+            didRespond = true
+            timeoutItem.cancel()
+            
+            if let t1 = reply["t1"] as? Double,
+               let t2 = reply["t2"] as? Double,
+               let t3 = reply["t3"] as? Double {
+                let response = NTPSyncResponse(t1: t1, t2: t2, t3: t3)
+                completion(response)
+            } else {
+                print("⚠️ Invalid NTP sync response format")
+                completion(nil)
+            }
+        }) { error in
+            guard !didRespond else { return }
+            didRespond = true
+            timeoutItem.cancel()
+            print("❌ NTP sync request failed: \(error.localizedDescription)")
+            completion(nil)
+        }
     }
     
     // MARK: - Send Commands to Watch

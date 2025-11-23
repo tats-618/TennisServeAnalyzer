@@ -1,4 +1,4 @@
-// ーーーーー IMU Only Impact Detection + Normalized Efficiency Analysis ーーーーー
+// ーーーーー IMU Only Impact Detection + Normalized Efficiency Analysis + HealthKit Workout ーーーーー
 //
 //  ServeAnalyzer.swift
 //  TennisServeAnalyzer Watch App
@@ -7,6 +7,7 @@
 //  📊 スイング効率分析: 構え(Start)〜インパクト(End)で正規化 (0.0~1.0)
 //  🎯 スイング速度(Gyro)と衝撃(Accel Jerk)を監視してインパクトを特定
 //  🔧 NTP同期: インパクト時のタイムスタンプ、ラケット角度、ピーク位置をiOSへ送信
+//  🏋️ HealthKit Workout: バックグラウンド継続のためワークアウトセッション実装
 //
 
 import Foundation
@@ -14,8 +15,9 @@ import CoreMotion
 import Combine
 import simd
 import WatchKit
+import HealthKit
 
-final class ServeAnalyzer: ObservableObject {
+final class ServeAnalyzer: NSObject, ObservableObject {
     // MARK: - Public (UI Bindings)
     @Published var collectionState: DataCollectionState = .idle
     @Published var isRecording: Bool = false
@@ -43,6 +45,11 @@ final class ServeAnalyzer: ObservableObject {
     @Published var lastPeakPositionR: Double = 0.0
     @Published var lastPeakEvalText: String = ""
 
+    // MARK: - HealthKit Workout
+    private let healthStore = HKHealthStore()
+    private var workoutSession: HKWorkoutSession?
+    private var workoutBuilder: HKLiveWorkoutBuilder?
+    
     // MARK: - Internals
     private let watchManager = WatchConnectivityManager.shared
 
@@ -89,10 +96,107 @@ final class ServeAnalyzer: ObservableObject {
     private var currentPeakPositionR: Double = 0.0
 
     // MARK: - Init
-    init() {
-        print("⌚ ServeAnalyzer init (IMU Impact + Normalized Analysis + NTP Sync)")
+    override init() {
+        super.init()
+        print("⌚ ServeAnalyzer init (IMU Impact + Normalized Analysis + NTP Sync + HealthKit)")
         connectionStatusText = (watchManager.session?.isReachable ?? false) ? "iPhone接続" : "未接続"
+        requestHealthKitAuthorization()
         startStatusTimer()
+    }
+
+    // MARK: - HealthKit Authorization
+    private func requestHealthKitAuthorization() {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            print("❌ HealthKit not available on this device")
+            return
+        }
+        
+        let typesToShare: Set<HKSampleType> = [
+            HKObjectType.workoutType()
+        ]
+        
+        let typesToRead: Set<HKObjectType> = [
+            HKObjectType.quantityType(forIdentifier: .heartRate)!,
+            HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!
+        ]
+        
+        healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead) { success, error in
+            if success {
+                print("✅ HealthKit authorization granted")
+            } else {
+                print("❌ HealthKit authorization failed: \(error?.localizedDescription ?? "unknown")")
+            }
+        }
+    }
+
+    // MARK: - Workout Session Management
+    
+    /// ワークアウトセッション開始
+    private func startWorkoutSession() {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            print("❌ HealthKit not available")
+            return
+        }
+        
+        let configuration = HKWorkoutConfiguration()
+        configuration.activityType = .tennis
+        configuration.locationType = .outdoor
+        
+        do {
+            let session = try HKWorkoutSession(healthStore: healthStore, configuration: configuration)
+            let builder = session.associatedWorkoutBuilder()
+            
+            session.delegate = self
+            builder.delegate = self
+            
+            builder.dataSource = HKLiveWorkoutDataSource(
+                healthStore: healthStore,
+                workoutConfiguration: configuration
+            )
+            
+            self.workoutSession = session
+            self.workoutBuilder = builder
+            
+            let startDate = Date()
+            session.startActivity(with: startDate)
+            builder.beginCollection(withStart: startDate) { success, error in
+                if success {
+                    print("🏋️ Workout session started successfully")
+                } else {
+                    print("❌ Failed to start workout builder: \(error?.localizedDescription ?? "unknown")")
+                }
+            }
+            
+        } catch {
+            print("❌ Failed to create workout session: \(error.localizedDescription)")
+        }
+    }
+    
+    /// ワークアウトセッション終了
+    private func stopWorkoutSession() {
+        guard let session = workoutSession, let builder = workoutBuilder else {
+            print("⚠️ No active workout session to stop")
+            return
+        }
+        
+        session.end()
+        
+        builder.endCollection(withEnd: Date()) { success, error in
+            if success {
+                builder.finishWorkout { workout, error in
+                    if let workout = workout {
+                        print("✅ Workout saved: duration=\(workout.duration)s")
+                    } else {
+                        print("❌ Failed to save workout: \(error?.localizedDescription ?? "unknown")")
+                    }
+                }
+            } else {
+                print("❌ Failed to end workout collection: \(error?.localizedDescription ?? "unknown")")
+            }
+        }
+        
+        self.workoutSession = nil
+        self.workoutBuilder = nil
     }
 
     // MARK: - Status / Timers
@@ -132,6 +236,9 @@ final class ServeAnalyzer: ObservableObject {
         guard !isRecording else { return }
         print("🎬 Starting recording...")
 
+        // 🏋️ ワークアウトセッション開始
+        startWorkoutSession()
+        
         startTime = Date()
         lastHitTime = 0
         lastUserAccelMag = 0
@@ -148,7 +255,7 @@ final class ServeAnalyzer: ObservableObject {
         isRecording = true
         collectionState = DataCollectionState.collecting
         statusHeader = "📊 Recording"
-        print("✅ Recording started (IMU Only + NTP Sync)")
+        print("✅ Recording started (IMU Only + NTP Sync + Workout)")
     }
 
     func stopRecording() {
@@ -164,6 +271,9 @@ final class ServeAnalyzer: ObservableObject {
         
         // インパクトデータをiOSへ送信
         sendAnalysisToiOS()
+        
+        // 🏋️ ワークアウトセッション終了
+        stopWorkoutSession()
     }
 
     // MARK: - IMU Lifecyle
@@ -501,5 +611,47 @@ final class ServeAnalyzer: ObservableObject {
         statusHeader = "⏸ Idle"
         statusDetail = "リセット完了"
         collectionState = .idle
+    }
+}
+
+// MARK: - HKWorkoutSessionDelegate
+extension ServeAnalyzer: HKWorkoutSessionDelegate {
+    func workoutSession(_ workoutSession: HKWorkoutSession,
+                       didChangeTo toState: HKWorkoutSessionState,
+                       from fromState: HKWorkoutSessionState,
+                       date: Date) {
+        DispatchQueue.main.async {
+            switch toState {
+            case .running:
+                print("🏋️ Workout session state: Running")
+            case .ended:
+                print("🏁 Workout session state: Ended")
+            case .paused:
+                print("⏸️ Workout session state: Paused")
+            case .prepared:
+                print("🔧 Workout session state: Prepared")
+            case .stopped:
+                print("🛑 Workout session state: Stopped")
+            @unknown default:
+                print("❓ Workout session state: Unknown")
+            }
+        }
+    }
+    
+    func workoutSession(_ workoutSession: HKWorkoutSession,
+                       didFailWithError error: Error) {
+        print("❌ Workout session failed: \(error.localizedDescription)")
+    }
+}
+
+// MARK: - HKLiveWorkoutBuilderDelegate
+extension ServeAnalyzer: HKLiveWorkoutBuilderDelegate {
+    func workoutBuilder(_ workoutBuilder: HKLiveWorkoutBuilder,
+                       didCollectDataOf collectedTypes: Set<HKSampleType>) {
+        // データ収集時の処理（必要に応じて実装）
+    }
+    
+    func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) {
+        // イベント収集時の処理（必要に応じて実装）
     }
 }

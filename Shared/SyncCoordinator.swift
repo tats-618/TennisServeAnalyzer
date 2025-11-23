@@ -107,6 +107,9 @@ class SyncCoordinator {
     private let maxSyncAttempts: Int = 5
     private let maxAcceptableRTT: Double = 0.100  // 100ms
     
+    /// 🆕 最良の同期結果（RTTが最小の試行）
+    private var bestAttempt: (offset: Double, rtt: Double)?
+    
     /// 同期進行中フラグ
     private var isSyncInProgress: Bool = false
     
@@ -164,6 +167,7 @@ class SyncCoordinator {
         isSyncInProgress = true
         syncCompletionHandlers.append(completion)
         syncAttempts = 0
+        bestAttempt = nil  // 🆕 最良試行をリセット
         
         attemptNTPSync(sendMessageHandler: sendMessageHandler)
     }
@@ -172,8 +176,21 @@ class SyncCoordinator {
         syncAttempts += 1
         
         if syncAttempts > maxSyncAttempts {
-            print("❌ NTP sync failed after \(maxSyncAttempts) attempts")
-            finishSync(success: false)
+            // 🆕 リトライ回数が尽きた場合、bestAttemptを採用
+            if let best = bestAttempt {
+                print("⚠️ Max attempts reached, using best result:")
+                print("   Quality (RTT): \(String(format: "%.1f", best.rtt * 1000))ms")
+                print("   Offset: \(String(format: "%.3f", best.offset * 1000))ms")
+                
+                self.timeOffset = best.offset
+                self.syncQuality = best.rtt
+                self.isSyncComplete = true
+                
+                finishSync(success: true)
+            } else {
+                print("❌ NTP sync failed after \(maxSyncAttempts) attempts (no valid data)")
+                finishSync(success: false)
+            }
             return
         }
         
@@ -219,23 +236,34 @@ class SyncCoordinator {
         print("   RTT: \(String(format: "%.3f", rtt * 1000))ms")
         print("   Offset: \(String(format: "%.3f", offset * 1000))ms")
         
+        // 🆕 最良試行の更新
+        if let best = bestAttempt {
+            if rtt < best.rtt {
+                bestAttempt = (offset: offset, rtt: rtt)
+                print("✨ New best attempt: RTT=\(String(format: "%.1f", rtt * 1000))ms")
+            }
+        } else {
+            bestAttempt = (offset: offset, rtt: rtt)
+            print("✨ First valid attempt recorded")
+        }
+        
         // RTT品質チェック
-        if rtt > maxAcceptableRTT {
-            print("⚠️ RTT too high (\(String(format: "%.1f", rtt * 1000))ms), retrying...")
+        if rtt <= maxAcceptableRTT {
+            // 🆕 閾値以内なら即座に採用
+            print("✅ NTP sync complete: offset=\(String(format: "%.3f", offset * 1000))ms, quality=\(String(format: "%.1f", rtt * 1000))ms")
+            
+            self.timeOffset = offset
+            self.syncQuality = rtt
+            self.isSyncComplete = true
+            
+            finishSync(success: true)
+        } else {
+            // 🆕 閾値超えでもリトライを継続
+            print("⚠️ RTT too high (\(String(format: "%.1f", rtt * 1000))ms), retrying... (best so far: \(String(format: "%.1f", (bestAttempt?.rtt ?? 999) * 1000))ms)")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 self?.attemptNTPSync(sendMessageHandler: sendMessageHandler)
             }
-            return
         }
-        
-        // 同期成功
-        self.timeOffset = offset
-        self.syncQuality = rtt
-        self.isSyncComplete = true
-        
-        print("✅ NTP sync complete: offset=\(String(format: "%.3f", offset * 1000))ms, quality=\(String(format: "%.1f", rtt * 1000))ms")
-        
-        finishSync(success: true)
     }
     
     private func finishSync(success: Bool) {
@@ -391,6 +419,7 @@ class SyncCoordinator {
         syncQuality = 0.0
         isSyncComplete = false
         syncAttempts = 0
+        bestAttempt = nil  // 🆕 最良試行をクリア
         isSyncInProgress = false
         syncCompletionHandlers.removeAll()
         
@@ -412,6 +441,7 @@ class SyncCoordinator {
         is_complete: \(isSyncComplete)
         time_offset: \(String(format: "%.3f", timeOffset * 1000))ms
         sync_quality: \(String(format: "%.1f", syncQuality * 1000))ms RTT
+        best_attempt: \(bestAttempt.map { "RTT=\(String(format: "%.1f", $0.rtt * 1000))ms" } ?? "none")
         """
     }
 }
