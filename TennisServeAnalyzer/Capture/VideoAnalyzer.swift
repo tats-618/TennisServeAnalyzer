@@ -45,6 +45,9 @@ class VideoAnalyzer: NSObject, ObservableObject {
     @Published var isWatchConnected: Bool = false
     @Published var watchSamplesReceived: Int = 0
     
+    // ★ 追加: Watchから受信したServeAnalysis
+    private var watchAnalysis: ServeAnalysis?
+    
     // Components
     private var videoCaptureManager: VideoCaptureManager?
     
@@ -161,6 +164,34 @@ class VideoAnalyzer: NSObject, ObservableObject {
         watchManager?.onBatchDataReceived = { [weak self] samples in
             self?.handleWatchBatchData(samples)
         }
+        
+        // ★ 追加: ServeAnalysis受信コールバック
+        watchManager?.onAnalysisResultReceived = { [weak self] analysis in
+            self?.handleWatchAnalysis(analysis)
+        }
+    }
+    
+    // MARK: - ★ Sensor Fusion Handler
+    private func handleWatchAnalysis(_ analysis: ServeAnalysis) {
+        let receiveTime = Date()
+        print("📊 Received ServeAnalysis from Watch at \(receiveTime)")
+        if let impactTime = analysis.impactTimestamp {
+            print("   Impact timestamp: \(String(format: "%.6f", impactTime))s")
+        }
+        if let yaw = analysis.impactRacketYaw {
+            print("   Racket yaw: \(String(format: "%.1f", yaw))°")
+        }
+        if let pitch = analysis.impactRacketPitch {
+            print("   Racket pitch: \(String(format: "%.1f", pitch))°")
+        }
+        if let peakR = analysis.swingPeakPositionR {
+            print("   Peak position (r): \(String(format: "%.3f", peakR))")
+        } else {
+            print("   ⚠️ Peak position (r) is nil")
+        }
+    
+        self.watchAnalysis = analysis
+        print("   ✅ watchAnalysis updated successfully")
     }
     
     // MARK: - Session Management Methods
@@ -252,6 +283,9 @@ class VideoAnalyzer: NSObject, ObservableObject {
         
         print("🎬 Starting recording (UI Updates DISABLED, latest-frame priority)...")
         
+        // ★ 重要: watchAnalysisを即座にリセット（前回のデータを確実にクリア）
+        self.watchAnalysis = nil
+        
         videoCaptureManager?.stopRecording()
         videoCaptureManager = nil
         
@@ -281,20 +315,12 @@ class VideoAnalyzer: NSObject, ObservableObject {
             self.frameDataHistory.removeAll()
             self.actualBallDetections = 0
             self.predictedBallDetections = 0
+            self.watchAnalysis = nil
             
             self.ballTrackerLock.lock()
             self._ballTracker = nil
             self.ballTrackerLock.unlock()
         }
-        
-        // ⚠️ UI更新無効化: ここでのステートリセットは最低限
-        /*
-        DispatchQueue.main.async { [weak self] in
-            self?.trophyPoseDetected = false
-            self?.trophyAngles = nil
-            self?.pelvisPosition = nil
-        }
-        */
         
         // 各コンポーネントのウォームアップ
         processingQueue.async { [weak self] in
@@ -305,6 +331,22 @@ class VideoAnalyzer: NSObject, ObservableObject {
         }
         
         measurementStartTime = Date()
+        
+        // ★ NTP時刻同期を開始
+        print("🕒 Starting NTP time sync...")
+        
+        watchManager?.startNTPSync { success in
+            if success {
+                let offset = SyncCoordinator.shared.timeOffset
+                let rtt = SyncCoordinator.shared.syncQuality
+                print("✅ NTP sync completed successfully")
+                print("   Time offset: \(String(format: "%.3f", offset * 1000))ms")
+                print("   RTT: \(String(format: "%.1f", rtt * 1000))ms")
+            } else {
+                print("⚠️ NTP sync failed, will use fallback method")
+            }
+        }
+
         watchManager?.startWatchRecording()
         state = .recording
         videoCaptureManager?.startRecording()
@@ -346,7 +388,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
                 self.state = .analyzing
             }
             
-            DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3.0) { [weak self] in
                 self?.finalizeAnalysis()
             }
         }
@@ -464,7 +506,6 @@ class VideoAnalyzer: NSObject, ObservableObject {
     }
     
     private func filterOutliers(from balls: [BallDetection], screenSize: CGSize) -> [BallDetection] {
-        // ... (元のコードそのまま)
         guard balls.count > 2 else { return balls }
         let sortedBalls = balls.sorted { $0.timestamp < $1.timestamp }
         var filtered: [BallDetection] = []
@@ -489,7 +530,6 @@ class VideoAnalyzer: NSObject, ObservableObject {
     }
     
     private func detectTrophyPoseFromBallApex() -> TrophyPoseEvent? {
-        // ... (元のコードと同じ)
         let tracker = getOrCreateBallTracker()
         let ballHistory = tracker.getDetectionHistory()
         guard !ballHistory.isEmpty else { return nil }
@@ -550,18 +590,82 @@ class VideoAnalyzer: NSObject, ObservableObject {
         }
     }
     
+    // MARK: - ★ Sensor Fusion - Finalize Analysis
     private func finalizeAnalysis() {
-        print("=== 測定終了 ===")
+        print("=== 測定終了（センサーフュージョン版・ロバスト対応） ===")
         processingQueue.async { [weak self] in
             guard let self = self else { return }
-            
-            let metrics: ServeMetrics
+    
+            var metrics: ServeMetrics
             let trophyResult = self.detectTrophyPoseFromBallApex()
-            
+    
             if let trophy = trophyResult {
                 let frameWidth = trophy.pose.imageSize.width
                 let baselineX = frameWidth / 2.0
-                let impact = self.impactEvent ?? self.createDummyImpactEvent()
+    
+                // ★ 修正1: Watchデータを必須とせず、取得できている場合のみ変数に保持
+                let watchData = self.watchAnalysis
+                if watchData == nil {
+                    print("⚠️ Watch data missing or delayed. Proceeding with Vision-only analysis.")
+                } else {
+                    print("✅ Watch data available")
+                    if let peakR = watchData?.swingPeakPositionR {
+                        print("   Peak position (r) in watchData: \(String(format: "%.3f", peakR))")
+                    } else {
+                        print("   ⚠️ Peak position (r) is nil in watchData")
+                    }
+                }
+    
+                // ★ ステップ2: インパクトタイムスタンプをiOS基準に変換（Watchデータがある場合のみ）
+                var impactTimeIOS: Double?
+                var impactPose: PoseData?
+                var syncQuality = "no_sync"
+    
+                if let wData = watchData,
+                   let impactTimeWatch = wData.impactTimestamp,
+                   SyncCoordinator.shared.isSyncComplete {
+                    
+                    // NTP同期が完了している場合
+                    if let convertedTime = SyncCoordinator.shared.convertWatchTimeToiOS(impactTimeWatch) {
+                        impactTimeIOS = convertedTime
+                        syncQuality = "ntp_sync"
+    
+                        print("✅ Sensor Fusion:")
+                        print("   Watch impact time: \(String(format: "%.6f", impactTimeWatch))s")
+                        print("   iOS impact time: \(String(format: "%.6f", convertedTime))s")
+    
+                        // ★ ステップ3: poseHistoryから最近接フレームを検索
+                        let poseHistoryCopy = self.dataQueue.sync { self.poseHistory }
+                        impactPose = self.findClosestPose(to: convertedTime, in: poseHistoryCopy)
+    
+                        if let pose = impactPose {
+                            let timeDiff = abs(pose.timestamp - convertedTime)
+                            print("   Closest pose: \(String(format: "%.6f", pose.timestamp))s (diff: \(String(format: "%.3f", timeDiff * 1000))ms)")
+                        }
+                    }
+                } else {
+                    // Watchデータがない、または同期未完了の場合
+                    if watchData == nil {
+                        syncQuality = "vision_only"
+                    } else {
+                        print("⚠️ NTP sync not complete, skipping precise timestamp fusion")
+                        syncQuality = "no_ntp_sync"
+                    }
+                }
+    
+                // フォールバック: インパクトPoseが特定できなかった場合、poseHistoryの最後（またはTrophyの少し後）を使用
+                if impactPose == nil {
+                    let poseHistoryCopy = self.dataQueue.sync { self.poseHistory }
+                    
+                    // ヒューリスティック: トロフィーポーズから約0.4秒後のフレームを探す
+                    let estimatedImpactTime = trophy.timestamp + 0.4
+                    impactPose = self.findClosestPose(to: estimatedImpactTime, in: poseHistoryCopy) ?? poseHistoryCopy.last
+                    
+                    syncQuality += "_fallback"
+                    print("   Using fallback impact pose (approx 0.4s after trophy)")
+                }
+    
+                // ★ ステップ4: 骨盤上昇量計算のためのベース/ピークPose取得
                 let windowBefore: Double = 0.2
                 let windowAfter: Double = 0.6
                 let rangeStart = trophy.timestamp - windowBefore
@@ -570,6 +674,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
                 let posesInRange = poseHistoryCopy.filter { pose in
                     pose.timestamp >= rangeStart && pose.timestamp <= rangeEnd
                 }
+    
                 var lowestY: CGFloat = -.infinity
                 var highestY: CGFloat = .infinity
                 var lowestPose: PoseData?
@@ -581,31 +686,214 @@ class VideoAnalyzer: NSObject, ObservableObject {
                         if hipY < highestY { highestY = hipY; highestPose = pose }
                     }
                 }
+    
                 let pelvisBasePose = lowestPose
-                let impactPose = highestPose ?? poseHistoryCopy.last
+                let pelvisImpactPose = highestPose ?? impactPose
+    
+                // ★ ステップ5: 体軸の傾きを計算
+                var bodyAxisDelta: Double = 999.0
+                if let pose = impactPose {
+                    bodyAxisDelta = PoseDetector.bodyAxisDelta(pose) ?? 999.0
+                    print("✅ Body axis calculated: \(String(format: "%.1f", bodyAxisDelta))°")
+                } else {
+                    bodyAxisDelta = PoseDetector.bodyAxisDelta(trophy.pose) ?? 999.0
+                }
+    
+                // ★ ステップ6: Watch データをダミーImpactEventに変換（ない場合は推定時刻）
+                let dummyImpact = ImpactEvent(
+                    timestamp: impactTimeIOS ?? (trophy.timestamp + 0.4),
+                    monotonicMs: Int64((impactTimeIOS ?? (trophy.timestamp + 0.4)) * 1000),
+                    peakAngularVelocity: 0.0,
+                    peakJerk: 0.0,
+                    spectralPower: 0.0,
+                    confidence: 1.0
+                )
+    
                 let tossHistory = trophy.filteredBalls ?? []
-                
-                metrics = MetricsCalculator.calculateMetrics(
+    
+                // ★ ステップ7: メトリクス計算 (Watch IMUがない場合は空配列で計算される)
+                let rawMetrics = MetricsCalculator.calculateMetrics(
                     trophyPose: trophy,
-                    impactEvent: impact,
+                    impactEvent: dummyImpact,
                     tossHistory: tossHistory,
                     imuHistory: self.watchIMUHistory,
                     calibration: nil,
                     baselineX: baselineX,
-                    impactPose: impactPose,
+                    impactPose: pelvisImpactPose,
                     pelvisBasePose: pelvisBasePose
                 )
+    
+                // ★ ステップ8: Watchの解析データがあれば上書き反映
+                var finalYaw = rawMetrics.racketFaceYawDeg
+                var finalPitch = rawMetrics.racketFacePitchDeg
+                var finalScore5 = rawMetrics.score5_bodyAxisTilt
+                var finalScore6 = rawMetrics.score6_racketFaceAngle
+                var finalPeakTimingR = rawMetrics.wristRotationDeg  // ← 追加（ピーク加速タイミング）
+                var finalScore8 = rawMetrics.score8_wristwork       // ← 追加
+    
+                if let wData = watchData,
+                   let yaw = wData.impactRacketYaw,
+                   let pitch = wData.impactRacketPitch {
+                    print("✅ Using Watch racket angles: yaw=\(String(format: "%.1f", yaw))°, pitch=\(String(format: "%.1f", pitch))°")
+                    finalYaw = yaw
+                    finalPitch = pitch
+                    finalScore6 = self.scoreRacketFace(yaw: yaw, pitch: pitch)
+                }
+    
+                // 体軸スコアを再計算
+                finalScore5 = self.scoreBodyAxisTilt(bodyAxisDelta)
+    
+                // ★ ピーク加速タイミングをWatchデータから取得（あれば上書き）
+                if let wData = watchData, let peakR = wData.swingPeakPositionR {
+                    print("✅ Using Watch peak acceleration timing: r=\(String(format: "%.3f", peakR))")
+                    finalPeakTimingR = peakR
+                    finalScore8 = self.scorePeakAccelerationTiming(peakR)
+                } else {
+                    print("⚠️ Using iOS calculated peak timing: r=\(String(format: "%.3f", finalPeakTimingR)) (score: \(finalScore8))")
+                }
+    
+                // メトリクスを再構築
+                var tempMetrics = ServeMetrics(
+                    elbowAngleDeg: rawMetrics.elbowAngleDeg,
+                    armpitAngleDeg: rawMetrics.armpitAngleDeg,
+                    pelvisRisePx: rawMetrics.pelvisRisePx,
+                    leftArmTorsoAngleDeg: rawMetrics.leftArmTorsoAngleDeg,
+                    leftArmExtensionDeg: rawMetrics.leftArmExtensionDeg,
+                    bodyAxisDeviationDeg: bodyAxisDelta,
+                    racketFaceYawDeg: finalYaw,
+                    racketFacePitchDeg: finalPitch,
+                    tossOffsetFromBaselinePx: rawMetrics.tossOffsetFromBaselinePx,
+                    wristRotationDeg: finalPeakTimingR,            // ← 変更（ピーク加速タイミング）
+                    tossPositionX: rawMetrics.tossPositionX,
+                    tossOffsetFromCenterPx: rawMetrics.tossOffsetFromCenterPx,
+                    score1_elbowAngle: rawMetrics.score1_elbowAngle,
+                    score2_armpitAngle: rawMetrics.score2_armpitAngle,
+                    score3_lowerBodyContribution: rawMetrics.score3_lowerBodyContribution,
+                    score4_leftHandPosition: rawMetrics.score4_leftHandPosition,
+                    score5_bodyAxisTilt: finalScore5,
+                    score6_racketFaceAngle: finalScore6,
+                    score7_tossPosition: rawMetrics.score7_tossPosition,
+                    score8_wristwork: finalScore8,                 // ← 変更（ピーク加速タイミングスコア）
+                    totalScore: 0,
+                    timestamp: Date(),
+                    flags: rawMetrics.flags + ["robust_fusion", syncQuality]
+                )
+    
+                // 総合スコアを再計算
+                let scores = [
+                    tempMetrics.score1_elbowAngle,
+                    tempMetrics.score2_armpitAngle,
+                    tempMetrics.score3_lowerBodyContribution,
+                    tempMetrics.score4_leftHandPosition,
+                    tempMetrics.score5_bodyAxisTilt,
+                    tempMetrics.score6_racketFaceAngle,
+                    tempMetrics.score7_tossPosition,
+                    tempMetrics.score8_wristwork
+                ]
+                let total = Double(scores.reduce(0, +)) / 8.0
+    
+                metrics = ServeMetrics(
+                    elbowAngleDeg: tempMetrics.elbowAngleDeg,
+                    armpitAngleDeg: tempMetrics.armpitAngleDeg,
+                    pelvisRisePx: tempMetrics.pelvisRisePx,
+                    leftArmTorsoAngleDeg: tempMetrics.leftArmTorsoAngleDeg,
+                    leftArmExtensionDeg: tempMetrics.leftArmExtensionDeg,
+                    bodyAxisDeviationDeg: tempMetrics.bodyAxisDeviationDeg,
+                    racketFaceYawDeg: tempMetrics.racketFaceYawDeg,
+                    racketFacePitchDeg: tempMetrics.racketFacePitchDeg,
+                    tossOffsetFromBaselinePx: tempMetrics.tossOffsetFromBaselinePx,
+                    wristRotationDeg: tempMetrics.wristRotationDeg,
+                    tossPositionX: tempMetrics.tossPositionX,
+                    tossOffsetFromCenterPx: tempMetrics.tossOffsetFromCenterPx,
+                    score1_elbowAngle: tempMetrics.score1_elbowAngle,
+                    score2_armpitAngle: tempMetrics.score2_armpitAngle,
+                    score3_lowerBodyContribution: tempMetrics.score3_lowerBodyContribution,
+                    score4_leftHandPosition: tempMetrics.score4_leftHandPosition,
+                    score5_bodyAxisTilt: tempMetrics.score5_bodyAxisTilt,
+                    score6_racketFaceAngle: tempMetrics.score6_racketFaceAngle,
+                    score7_tossPosition: tempMetrics.score7_tossPosition,
+                    score8_wristwork: tempMetrics.score8_wristwork,
+                    totalScore: Int(total),
+                    timestamp: tempMetrics.timestamp,
+                    flags: tempMetrics.flags
+                )
+    
             } else {
+                // トロフィーポーズ検出失敗時のみフォールバック（50点）
+                print("⚠️ Trophy pose detection failed.")
                 let frameCountCopy = self.dataQueue.sync { self.processedFrameCount }
                 let duration = Date().timeIntervalSince(self.measurementStartTime ?? Date())
                 let avgFPS = Double(frameCountCopy) / max(1.0, duration)
                 metrics = self.calculatePartialMetrics(avgFPS: avgFPS)
             }
-            
-            print("✅ 解析完了 - スコア: \(metrics.totalScore)/100")
+    
+            print("✅ 解析完了（スコア: \(metrics.totalScore)）")
             DispatchQueue.main.async {
                 self.state = .completed(metrics)
             }
+        }
+    }
+    
+    // MARK: - ★ Sensor Fusion Helper Methods
+    /// 最近接Poseを検索
+    private func findClosestPose(to targetTime: Double, in poseHistory: [PoseData]) -> PoseData? {
+        var closestPose: PoseData?
+        var minTimeDiff = Double.infinity
+    
+        for pose in poseHistory {
+            let timeDiff = abs(pose.timestamp - targetTime)
+            if timeDiff < minTimeDiff {
+                minTimeDiff = timeDiff
+                closestPose = pose
+            }
+        }
+    
+        return closestPose
+    }
+    
+    /// スコア計算ヘルパー（MetricsCalculatorから移植）
+    private func scoreBodyAxisTilt(_ deltaDeg: Double) -> Int {
+        if deltaDeg <= 15 {
+            return 100
+        } else if deltaDeg <= 60 {
+            return Int(100.0 * (60.0 - deltaDeg) / 45.0)
+        } else {
+            return 0
+        }
+    }
+    
+    private func scoreRacketFace(yaw: Double, pitch: Double) -> Int {
+        let sYaw: Int
+        let absYaw = abs(yaw)
+        if absYaw <= 5 {
+            sYaw = 50
+        } else if absYaw <= 60 {
+            sYaw = Int(50.0 * (60.0 - absYaw) / 55.0)
+        } else {
+            sYaw = 0
+        }
+    
+        let sPitch: Int
+        let absPitch = abs(pitch)
+        if absPitch <= 10 {
+            sPitch = 50
+        } else if absPitch <= 60 {
+            sPitch = Int(50.0 * (50.0 - (absPitch - 10.0)) / 50.0)
+        } else {
+            sPitch = 0
+        }
+    
+        return sYaw + sPitch
+    }
+    
+    /// ピーク加速タイミングのスコアリング
+    private func scorePeakAccelerationTiming(_ r: Double) -> Int {
+        if r >= 0.9 {
+            return 100
+        } else if r > 0 {
+            return Int((100.0 * r) / 0.9)
+        } else {
+            return 0
         }
     }
     
@@ -620,7 +908,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
             racketFaceYawDeg: 15.0,
             racketFacePitchDeg: 10.0,
             tossOffsetFromBaselinePx: 0.0,
-            wristRotationDeg: 120.0,
+            wristRotationDeg: 0.5,
             tossPositionX: 0.0,
             tossOffsetFromCenterPx: 0.0,
             score1_elbowAngle: 50,
@@ -667,18 +955,8 @@ class VideoAnalyzer: NSObject, ObservableObject {
             self.frameDataHistory.removeAll()
             self.actualBallDetections = 0
             self.predictedBallDetections = 0
+            self.watchAnalysis = nil
         }
-        
-        // ⚠️ UI更新無効化: ここでのリセットも最小限
-        /*
-        DispatchQueue.main.async { [weak self] in
-            self?.detectedPose = nil
-            self?.detectedBall = nil
-            self?.trophyPoseDetected = false
-            self?.trophyAngles = nil
-            self?.pelvisPosition = nil
-        }
-        */
         
         ballTrackerLock.lock()
         _ballTracker = nil
@@ -728,19 +1006,7 @@ class VideoAnalyzer: NSObject, ObservableObject {
 extension VideoAnalyzer: VideoCaptureDelegate {
     func videoCaptureDidOutput(sampleBuffer: CMSampleBuffer, timestamp: Double) {
         guard case .recording = state else { return }
-        
-        // 📌 ここでは一切重い処理をしない。
-        //    ただ latestSampleBuffer に積んで visionQueue に投げるだけ。
         enqueueFrame(sampleBuffer: sampleBuffer)
-        
-        // FPS更新は依然としてUI負荷なので無効化
-        /*
-        if let manager = videoCaptureManager {
-            DispatchQueue.main.async { [weak self] in
-                self?.currentFPS = manager.currentFPS
-            }
-        }
-        */
     }
     
     func videoCaptureDidFail(error: Error) {
@@ -749,4 +1015,3 @@ extension VideoAnalyzer: VideoCaptureDelegate {
     func videoCaptureDidStart() { print("✅ Video capture started") }
     func videoCaptureDidStop() { print("✅ Video capture stopped") }
 }
-

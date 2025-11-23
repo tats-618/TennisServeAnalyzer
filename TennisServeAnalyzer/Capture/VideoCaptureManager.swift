@@ -3,7 +3,7 @@
 //  TennisServeAnalyzer
 //
 //  Camera capture system for tennis serve analysis
-//  🔧 修正: startPreview() メソッドを追加（カメラセッティング用）
+//  🔧 修正: startRunningエラー（Thread 29）の修正と設定競合の解消
 //
 
 import AVFoundation
@@ -63,10 +63,9 @@ class VideoCaptureManager: NSObject, ObservableObject {
         
         session.beginConfiguration()
         
-        // Set session preset
-        if session.canSetSessionPreset(.high) {
-            session.sessionPreset = .high
-        }
+        // 🔧 修正: 手動でフォーマット(FPS)を変更するため、Presetは.inputPriorityを使用する
+        // .high だと activeFormat の変更と競合する場合がある
+        session.sessionPreset = .inputPriority
         
         // Setup video device (back camera)
         guard let videoDevice = AVCaptureDevice.default(
@@ -141,72 +140,74 @@ class VideoCaptureManager: NSObject, ObservableObject {
     }
     
     private func configureDevice(_ device: AVCaptureDevice) throws {
-            try device.lockForConfiguration()
+        try device.lockForConfiguration()
+        // 🔧 修正: エラー発生時も確実にロック解除するためにdeferを使用
+        defer { device.unlockForConfiguration() }
+        
+        print("🔍 Searching for 120fps format...")
+        print("   Available formats: \(device.formats.count)")
+        
+        // Find 120fps format
+        var bestFormat: AVCaptureDevice.Format?
+        var bestFrameRate: Float64 = 0
+        
+        for (index, format) in device.formats.enumerated() {
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
             
-            print("🔍 Searching for 120fps format...")
-            print("   Available formats: \(device.formats.count)")
+            // Look for format with sufficient resolution (portrait or landscape)
+            let minDimension = min(dimensions.width, dimensions.height)
+            let maxDimension = max(dimensions.width, dimensions.height)
             
-            // Find 120fps format
-            var bestFormat: AVCaptureDevice.Format?
-            var bestFrameRate: Float64 = 0
-            
-            for (index, format) in device.formats.enumerated() {
-                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                
-                // Look for format with sufficient resolution (portrait or landscape)
-                let minDimension = min(dimensions.width, dimensions.height)
-                let maxDimension = max(dimensions.width, dimensions.height)
-                
-                // Accept any format with at least 720p (1280x720) that supports 120fps
-                if minDimension >= 720 && maxDimension >= 1280 {
-                    for range in format.videoSupportedFrameRateRanges {
-                        if range.maxFrameRate >= Double(targetFPS) {
-                            if range.maxFrameRate > bestFrameRate {
-                                bestFormat = format
-                                bestFrameRate = range.maxFrameRate
-                                print("   Format \(index): \(dimensions.width)x\(dimensions.height) @ \(range.maxFrameRate)fps ✓")
-                            }
+            // Accept any format with at least 720p (1280x720) that supports 120fps
+            if minDimension >= 720 && maxDimension >= 1280 {
+                for range in format.videoSupportedFrameRateRanges {
+                    if range.maxFrameRate >= Double(targetFPS) {
+                        if range.maxFrameRate > bestFrameRate {
+                            bestFormat = format
+                            bestFrameRate = range.maxFrameRate
+                            // print("   Format \(index): \(dimensions.width)x\(dimensions.height) @ \(range.maxFrameRate)fps ✓")
                         }
                     }
                 }
             }
+        }
+        
+        if let format = bestFormat {
+            device.activeFormat = format
             
-            if let format = bestFormat {
+            // Set frame rate to 120fps
+            device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFPS))
+            device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFPS))
+            
+            let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            print("✅ Video format set: \(dims.width)x\(dims.height) @ \(bestFrameRate)fps")
+        } else {
+            print("⚠️ 120fps format not available, using default")
+            
+            // Fallback to highest available FPS
+            if let format = device.formats.first {
                 device.activeFormat = format
-                
-                // Set frame rate to 120fps
-                device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFPS))
-                device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFPS))
-                
-                let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                print("✅ Video format set: \(dims.width)x\(dims.height) @ \(bestFrameRate)fps")
-            } else {
-                print("⚠️ 120fps format not available, using default")
-                
-                // Fallback to highest available FPS
-                if let format = device.formats.first {
-                    device.activeFormat = format
-                    if let maxRate = format.videoSupportedFrameRateRanges.first {
-                        let maxFPS = Int(maxRate.maxFrameRate)
-                        device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(maxFPS))
-                        device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(maxFPS))
-                        let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                        print("⚠️ Using fallback: \(dims.width)x\(dims.height) @ \(maxFPS)fps")
-                    }
+                if let maxRate = format.videoSupportedFrameRateRanges.first {
+                    let maxFPS = Int(maxRate.maxFrameRate)
+                    device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(maxFPS))
+                    device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(maxFPS))
+                    let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                    print("⚠️ Using fallback: \(dims.width)x\(dims.height) @ \(maxFPS)fps")
                 }
             }
-            
-            // Auto exposure and focus
-            if device.isExposureModeSupported(.continuousAutoExposure) {
-                device.exposureMode = .continuousAutoExposure
-            }
-            
-            if device.isFocusModeSupported(.continuousAutoFocus) {
-                device.focusMode = .continuousAutoFocus
-            }
-            
-            device.unlockForConfiguration()
         }
+        
+        // Auto exposure and focus
+        if device.isExposureModeSupported(.continuousAutoExposure) {
+            device.exposureMode = .continuousAutoExposure
+        }
+        
+        if device.isFocusModeSupported(.continuousAutoFocus) {
+            device.focusMode = .continuousAutoFocus
+        }
+        
+        // 🔧 deferにより unlockForConfiguration はここで自動的に呼ばれる
+    }
     
     // MARK: - 🆕 Preview Control (カメラセッティング用)
     /// カメラプレビューのみを開始（録画なし）
@@ -271,11 +272,8 @@ class VideoCaptureManager: NSObject, ObservableObject {
         videoQueue.async { [weak self] in
             guard let self = self else { return }
             
-            // Stop session if running
-            if session.isRunning {
-                print("⏸ Stopping existing session...")
-                session.stopRunning()
-            }
+            // 🔧 修正: デバイス再設定をsession設定変更ブロックで囲む（安全のため）
+            session.beginConfiguration()
             
             // Reconfigure device to ensure 120fps is active
             if let device = self.videoDevice {
@@ -288,9 +286,14 @@ class VideoCaptureManager: NSObject, ObservableObject {
                 }
             }
             
-            // Start session
-            print("▶️ Starting session...")
-            session.startRunning()
+            session.commitConfiguration()
+            
+            // Start session if needed
+            // 🔧 修正: commit後にstartRunningを呼ぶ
+            if !session.isRunning {
+                print("▶️ Starting session...")
+                session.startRunning()
+            }
             
             // Verify FPS after starting
             if let device = self.videoDevice {

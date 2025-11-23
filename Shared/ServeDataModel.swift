@@ -59,19 +59,41 @@ public struct ServeSample: Codable, Identifiable {
 }
 
 // サーブ解析結果を表す構造体
-public struct ServeAnalysis {
+public struct ServeAnalysis: Codable {
     public let maxAcceleration: Double
     public let maxAngularVelocity: Double
     public let estimatedSwingSpeed: Double
     public let duration: TimeInterval
     public let recordedAt: Date
     
-    public init(maxAcceleration: Double, maxAngularVelocity: Double, estimatedSwingSpeed: Double, duration: TimeInterval, recordedAt: Date) {
+    // ✅ 追加: センサーフュージョン用データ
+    public let impactTimestamp: TimeInterval?
+    public let impactRacketYaw: Double?
+    public let impactRacketPitch: Double?
+    public let swingPeakPositionR: Double?  // 追加
+    
+    public init(
+        maxAcceleration: Double,
+        maxAngularVelocity: Double,
+        estimatedSwingSpeed: Double,
+        duration: TimeInterval,
+        recordedAt: Date,
+        // ✅ 追加引数（デフォルト値付き）
+        impactTimestamp: TimeInterval? = nil,
+        impactRacketYaw: Double? = nil,
+        impactRacketPitch: Double? = nil,
+        swingPeakPositionR: Double? = nil
+    ) {
         self.maxAcceleration = maxAcceleration
         self.maxAngularVelocity = maxAngularVelocity
         self.estimatedSwingSpeed = estimatedSwingSpeed
         self.duration = duration
         self.recordedAt = recordedAt
+        
+        self.impactTimestamp = impactTimestamp
+        self.impactRacketYaw = impactRacketYaw
+        self.impactRacketPitch = impactRacketPitch
+        self.swingPeakPositionR = swingPeakPositionR
     }
 }
 

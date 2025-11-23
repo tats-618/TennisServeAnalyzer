@@ -388,7 +388,7 @@ struct SessionSummaryView: View {
             "体軸": s.score5_bodyAxisTilt,
             "面角": s.score6_racketFaceAngle,
             "トス": s.score7_tossPosition,
-            "リスト": s.score8_wristwork
+            "加速": s.score8_wristwork
         ]
     }
     
@@ -579,7 +579,7 @@ struct ScoreTableImproved: View {
     
     private let metricNames = [
         "肘角度", "脇角度", "下半身貢献", "左手位置",
-        "体軸傾き", "ラケット面角", "トス位置", "リストワーク"
+        "体軸傾き", "ラケット面角", "トス位置", "ピーク加速"
     ]
     
     var body: some View {
@@ -671,7 +671,7 @@ struct ScoreTableImproved: View {
         case "体軸傾き":   return s.score5_bodyAxisTilt
         case "ラケット面角": return s.score6_racketFaceAngle
         case "トス位置":   return s.score7_tossPosition
-        case "リストワーク": return s.score8_wristwork
+        case "ピーク加速": return s.score8_wristwork
         default: return 0
         }
     }

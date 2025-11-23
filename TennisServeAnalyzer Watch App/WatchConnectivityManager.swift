@@ -135,7 +135,7 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             return
         }
         
-        let message: [String: Any] = [
+        var message: [String: Any] = [
             "type": "analysisResult",
             "maxAcceleration": analysis.maxAcceleration,
             "maxAngularVelocity": analysis.maxAngularVelocity,
@@ -143,6 +143,20 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             "duration": analysis.duration,
             "recordedAt": analysis.recordedAt.timeIntervalSince1970
         ]
+        
+        // NTP同期データを追加
+        if let impactTimestamp = analysis.impactTimestamp {
+            message["impactTimestamp"] = impactTimestamp
+        }
+        if let yaw = analysis.impactRacketYaw {
+            message["impactRacketYaw"] = yaw
+        }
+        if let pitch = analysis.impactRacketPitch {
+            message["impactRacketPitch"] = pitch
+        }
+        if let peakR = analysis.swingPeakPositionR {
+            message["swingPeakPositionR"] = peakR
+        }
         
         session.sendMessage(message, replyHandler: nil) { error in
             print("❌ Error sending analysis result: \(error.localizedDescription)")
@@ -191,6 +205,50 @@ extension WatchConnectivityManager: WCSessionDelegate {
     
     func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         print("📨 Received message with reply handler from iPhone")
+        
+        // NTP同期リクエストの処理
+        if let t1 = message["ntpSyncT1"] as? Double {
+            let t2 = ProcessInfo.processInfo.systemUptime  // Watch受信時刻
+            
+            // 最小限の処理でt3を取得（レスポンス直前）
+            let t3 = ProcessInfo.processInfo.systemUptime  // Watch返信時刻
+            
+            let response: [String: Any] = [
+                "t1": t1,
+                "t2": t2,
+                "t3": t3
+            ]
+            
+            replyHandler(response)
+            print("✅ Sent NTP sync response to iPhone")
+            print("   t1 (echoed): \(String(format: "%.6f", t1))")
+            print("   t2 (recv): \(String(format: "%.6f", t2))")
+            print("   t3 (send): \(String(format: "%.6f", t3))")
+            return
+        }
+        
+        // Handle commands with reply
+        if let command = message["command"] as? String {
+            DispatchQueue.main.async { [weak self] in
+                switch command {
+                case "startRecording":
+                    print("▶️ Received START command from iPhone")
+                    self?.onStartRecording?()
+                    
+                case "stopRecording":
+                    print("⏹ Received STOP command from iPhone")
+                    self?.onStopRecording?()
+                    
+                default:
+                    print("⚠️ Unknown command: \(command)")
+                }
+            }
+        }
+        
+        // Handle time sync
+        if message["type"] as? String == "timeSync" {
+            print("⏱ Received time sync from iPhone")
+        }
         
         // Default reply
         replyHandler(["status": "ok"])

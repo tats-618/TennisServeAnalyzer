@@ -3,7 +3,7 @@
 //  TennisServeAnalyzer (iOS)
 //
 //  Receives IMU data from Apple Watch
-//  Updated: Optimized for 200Hz data reception
+//  Updated: Optimized for 200Hz data reception + NTP Time Sync
 //
 
 import Foundation
@@ -37,7 +37,7 @@ class WatchConnectivityManager: NSObject, ObservableObject {
     @Published var isWatchReachable: Bool = false
     @Published var lastReceivedTimestamp: Date?
     @Published var receivedSamplesCount: Int = 0
-    @Published var effectiveReceiveRate: Double = 0.0  // ✅ 追加：受信Hz表示
+    @Published var effectiveReceiveRate: Double = 0.0
     
     // Callbacks
     var onIMUDataReceived: ((ServeSample) -> Void)?
@@ -46,17 +46,20 @@ class WatchConnectivityManager: NSObject, ObservableObject {
     
     private var session: WCSession?
     
-    // ✅ 追加：並行処理用キュー（200Hz対応）
+    // 並行処理用キュー（200Hz対応）
     private let processingQueue = DispatchQueue(
         label: "com.tennisanalyzer.imuprocessing",
         qos: .userInitiated,
         attributes: .concurrent
     )
     
-    // ✅ 追加：受信レート計測
+    // 受信レート計測
     private var lastReceiveTime: TimeInterval = 0
     private var receiveIntervals: [TimeInterval] = []
     private var rateCheckTimer: Timer?
+    
+    /// 同期コーディネーター
+    private let syncCoordinator = SyncCoordinator.shared
     
     // MARK: - Initialization
     private override init() {
@@ -68,7 +71,7 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             session.activate()
             self.session = session
             
-            print("📱 iOS WatchConnectivityManager initialized (200Hz optimized)")
+            print("📱 iOS WatchConnectivityManager initialized (200Hz optimized + NTP Sync)")
             
             // 受信レート監視を開始
             startRateMonitoring()
@@ -100,6 +103,62 @@ class WatchConnectivityManager: NSObject, ObservableObject {
         }
         
         print("📊 iPhone receive rate: \(String(format: "%.1f", effectiveHz)) samples/sec")
+    }
+    
+    // MARK: - NTP Time Sync
+    
+    /// NTP方式の時刻同期を開始
+    func startNTPSync(completion: @escaping (Bool) -> Void) {
+        guard let session = session, session.isReachable else {
+            print("⚠️ Watch not reachable for NTP sync")
+            completion(false)
+            return
+        }
+        
+        print("🕒 Starting NTP time sync with Watch...")
+        
+        syncCoordinator.performNTPSync(sendMessageHandler: { [weak self] request, responseHandler in
+            guard let self = self, let session = self.session, session.isReachable else {
+                responseHandler(nil)
+                return
+            }
+            
+            let message: [String: Any] = [
+                "ntpSyncT1": request.t1
+            ]
+            
+            // タイムアウト処理
+            var didRespond = false
+            let timeoutItem = DispatchWorkItem {
+                if !didRespond {
+                    print("⚠️ NTP sync timeout")
+                    responseHandler(nil)
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: timeoutItem)
+            
+            session.sendMessage(message, replyHandler: { reply in
+                guard !didRespond else { return }
+                didRespond = true
+                timeoutItem.cancel()
+                
+                if let t1 = reply["t1"] as? Double,
+                   let t2 = reply["t2"] as? Double,
+                   let t3 = reply["t3"] as? Double {
+                    let response = NTPSyncResponse(t1: t1, t2: t2, t3: t3)
+                    responseHandler(response)
+                } else {
+                    print("⚠️ Invalid NTP response format")
+                    responseHandler(nil)
+                }
+            }) { error in
+                guard !didRespond else { return }
+                didRespond = true
+                timeoutItem.cancel()
+                print("❌ NTP sync message failed: \(error.localizedDescription)")
+                responseHandler(nil)
+            }
+        }, completion: completion)
     }
     
     // MARK: - Send Commands to Watch
@@ -194,7 +253,6 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             gyroscope: (gyroX, gyroY, gyroZ)
         )
         
-        // レート計測
         trackReceiveRate()
         
         DispatchQueue.main.async { [weak self] in
@@ -209,7 +267,6 @@ class WatchConnectivityManager: NSObject, ObservableObject {
     }
     
     private func processBatchData(_ data: Data, metadata: [String: Any]) {
-        // ✅ 並行処理でデコード（200Hz対応）
         processingQueue.async { [weak self] in
             guard let self = self else { return }
             
@@ -219,7 +276,6 @@ class WatchConnectivityManager: NSObject, ObservableObject {
                 
                 print("📦 Received batch: \(samples.count) samples")
                 
-                // レート計測（バッチの最初のサンプルで）
                 self.trackReceiveRate()
                 
                 DispatchQueue.main.async {
@@ -239,7 +295,6 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             let interval = currentTime - lastReceiveTime
             receiveIntervals.append(interval)
             
-            // 最新100サンプルのみ保持
             if receiveIntervals.count > 100 {
                 receiveIntervals.removeFirst()
             }
@@ -258,15 +313,37 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             return
         }
         
+        // ★ NTP同期データを取得
+        let impactTimestamp = message["impactTimestamp"] as? TimeInterval
+        let impactRacketYaw = message["impactRacketYaw"] as? Double
+        let impactRacketPitch = message["impactRacketPitch"] as? Double
+        let swingPeakPositionR = message["swingPeakPositionR"] as? Double
+        
         let analysis = ServeAnalysis(
             maxAcceleration: maxAccel,
             maxAngularVelocity: maxGyro,
             estimatedSwingSpeed: swingSpeed,
             duration: duration,
-            recordedAt: Date(timeIntervalSince1970: recordedAt)
+            recordedAt: Date(timeIntervalSince1970: recordedAt),
+            impactTimestamp: impactTimestamp,
+            impactRacketYaw: impactRacketYaw,
+            impactRacketPitch: impactRacketPitch,
+            swingPeakPositionR: swingPeakPositionR
         )
         
         print("📊 Watch analysis result received")
+        if let impactTime = impactTimestamp {
+            print("   Impact timestamp: \(String(format: "%.6f", impactTime))s")
+        }
+        if let yaw = impactRacketYaw {
+            print("   Racket yaw: \(String(format: "%.1f", yaw))°")
+        }
+        if let pitch = impactRacketPitch {
+            print("   Racket pitch: \(String(format: "%.1f", pitch))°")
+        }
+        if let peakR = swingPeakPositionR {
+            print("   Peak position (r): \(String(format: "%.3f", peakR))")
+        }
         
         DispatchQueue.main.async { [weak self] in
             self?.onAnalysisResultReceived?(analysis)
@@ -362,8 +439,6 @@ extension WatchConnectivityManager: WCSessionDelegate {
     
     func session(_ session: WCSession, didReceiveMessageData messageData: Data) {
         print("📦 Received data message from Watch (\(messageData.count) bytes)")
-        
-        // Assume it's batch data
         processBatchData(messageData, metadata: [:])
     }
     

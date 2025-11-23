@@ -23,7 +23,7 @@ struct ServeMetrics: Codable {
     public let racketFaceYawDeg: Double             // 6a: ラケット面（Yaw）
     public let racketFacePitchDeg: Double           // 6b: ラケット面（Pitch）
     public let tossOffsetFromBaselinePx: Double     // 🔧 7: トス位置：基準線からのオフセット[px]（正=前、負=後ろ）
-    public let wristRotationDeg: Double             // 8: リストワーク（Trophy→Impactの回内外合計角度）
+    public let wristRotationDeg: Double             // 8: ピーク加速タイミング（r値: 0〜1の正規化時間、単位表示ではmsに変換）
     
     // 🆕 トスの横位置情報
     public let tossPositionX: Double                 // トスのx座標（ピクセル）
@@ -37,7 +37,7 @@ struct ServeMetrics: Codable {
     public let score5_bodyAxisTilt: Int
     public let score6_racketFaceAngle: Int
     public let score7_tossPosition: Int
-    public let score8_wristwork: Int
+    public let score8_wristwork: Int                 // ピーク加速タイミングのスコア（変数名は互換性のため維持）
 
     // Total score (weighted)
     public let totalScore: Int
@@ -90,7 +90,7 @@ enum MetricsCalculator {
         // 最も低い位置（pelvisBasePose）から最も高い位置（impactPose）への上昇量を測定
         let impactPoseResolved = impactPose ?? trophyPose.pose // フォールバック
         let basePoseResolved = pelvisBasePose ?? trophyPose.pose // 基準位置（最も低い位置）
-        var pelvisRisePx = pelvisRisePixels(basePoseResolved, impactPoseResolved)
+        let pelvisRisePx = pelvisRisePixels(basePoseResolved, impactPoseResolved)
         if impactPose == nil { flags.append("no_impact_pose_for_pelvisRise") }
         if pelvisBasePose == nil { flags.append("no_pelvis_base_pose") }
         let score3 = scorePelvisRise(pelvisRisePx)
@@ -133,13 +133,12 @@ enum MetricsCalculator {
         }
         let score7 = scoreTossPosition(tossResult.offsetFromBaseline)
 
-        // ========= 8) リストワーク（合計回内外角度）=========
-        let wristDeg = estimateWristRotationDeg(
+        // ========= 8) ピーク加速タイミング（正規化時間 r）=========
+        let peakTimingR = calculatePeakAccelerationTiming(
             imuHistory: imuHistory,
-            startMs: Int64(trophyPose.timestamp * 1000.0),
-            endMs: impactEvent.monotonicMs
+            impactMs: impactEvent.monotonicMs
         )
-        let score8 = scoreWristwork(wristDeg)
+        let score8 = scorePeakAccelerationTiming(peakTimingR)
 
         // ========= 合計（8項目の単純平均）=========
         let scores = [score1, score2, score3, score4, score5, score6, score7, score8]
@@ -156,7 +155,7 @@ enum MetricsCalculator {
             racketFaceYawDeg: rfYaw,
             racketFacePitchDeg: rfPitch,
             tossOffsetFromBaselinePx: tossResult.offsetFromBaseline,
-            wristRotationDeg: wristDeg,
+            wristRotationDeg: peakTimingR,
             tossPositionX: tossResult.posX,
             tossOffsetFromCenterPx: tossResult.offsetFromCenter,
             score1_elbowAngle: score1,
@@ -191,18 +190,18 @@ enum MetricsCalculator {
         let normalizedAngle = normalizeAngle(angle)
         
         // 設計書基準:
-        // - 理想範囲 90°~110° → 100点
+        // - 理想範囲 90°~115° → 100点
         // - 曲がりすぎ 0°~89.9° → 100×(θ/90)
-        // - 伸ばしすぎ 110.1°~180° → 100×((180−θ)/70)
+        // - 伸ばしすぎ 115.1°~180° → 100×((180−θ)/65)
         
-        if (90...110).contains(normalizedAngle) {
+        if (90...115).contains(normalizedAngle) {
             return 100
         } else if normalizedAngle < 90 {
             // 曲がりすぎ
             return Int(100.0 * normalizedAngle / 90.0)
         } else {
             // 伸ばしすぎ (110.1° ~ 180°)
-            return Int(100.0 * (180.0 - normalizedAngle) / 70.0)
+            return Int(100.0 * (180.0 - normalizedAngle) / 65.0)
         }
     }
 
@@ -354,39 +353,37 @@ enum MetricsCalculator {
     }
 
     private static func scoreRacketFace(yaw: Double, pitch: Double) -> Int {
-        // 🔧 設計書準拠: ロール（yaw相当）とピッチ
-        
-        // ロール（yaw）の評価
-        // - 理想範囲 -5°~+5° → 50点
-        // - 左/右に傾きすぎ -60°~-5.1° または +5.1°~+60° : 50×((60−|r|)/55)
-        // - 最低レベル |r|>60° : 0点
-        let sYaw: Int
-        let absYaw = abs(yaw)
-        if absYaw <= 5 {
-            sYaw = 50
-        } else if absYaw <= 60 {
-            sYaw = Int(50.0 * (60.0 - absYaw) / 55.0)
-        } else {
-            sYaw = 0
-        }
+            // ロール（yaw）の評価
+            // - 理想範囲 -10°~+10° → 50点
+            // - 左/右に傾きすぎ -60°~-10.1° または +10.1°~+60° : 50×((60−|r|)/50)
+            // - 最低レベル |r|>60° : 0点
+            
+            let sYaw: Int
+            let absYaw = abs(yaw)
+            
+            if absYaw <= 10 {
+                sYaw = 50
+            } else if absYaw <= 60 {
+                sYaw = Int(50.0 * (60.0 - absYaw) / 50.0)
+            } else {
+                sYaw = 0
+            }
 
-        // ピッチの評価
-        // - 理想範囲 -10°~+10° → 50点
-        // - 下/上向きすぎ -60°~-10.1° または +10.1°~+60° : 50×((50−|p|)/50)
-        // - 最低レベル |p|>60° : 0点
-        let sPitch: Int
-        let absPitch = abs(pitch)
-        if absPitch <= 10 {
-            sPitch = 50
-        } else if absPitch <= 60 {
-            sPitch = Int(50.0 * (50.0 - (absPitch - 10.0)) / 50.0)
-        } else {
-            sPitch = 0
-        }
+            // - 理想範囲 -10°~+10° → 50点
+            // - 計算分母: 50.0
+            let sPitch: Int
+            let absPitch = abs(pitch)
+            if absPitch <= 10 {
+                sPitch = 50
+            } else if absPitch <= 60 {
+                sPitch = Int(50.0 * (50.0 - (absPitch - 10.0)) / 50.0)
+            } else {
+                sPitch = 0
+            }
 
-        // 最終スコア = ロールスコア + ピッチスコア
-        return sYaw + sPitch
-    }
+            // 最終スコア = ロールスコア + ピッチスコア
+            return sYaw + sPitch
+        }
 
     // MARK: - 7) トス位置：基準線からのオフセット（px）
     private static func estimateTossPosition(
@@ -429,33 +426,99 @@ enum MetricsCalculator {
         return 0
     }
     
-    // MARK: - 8) リストワーク（回内外の合計角度）
-    private static func estimateWristRotationDeg(
+    // MARK: - 8) ピーク加速タイミング（正規化時間 r）
+    /// サーブ動作中の最大加速のタイミングを0〜1の正規化時間で計算
+    /// - Parameters:
+    ///   - imuHistory: IMUデータの履歴
+    ///   - impactMs: インパクト時刻（ミリ秒）
+    /// - Returns: 正規化時間 r（0〜1）。計算できない場合は0.0
+    private static func calculatePeakAccelerationTiming(
         imuHistory: [ServeSample],
-        startMs: Int64,
-        endMs: Int64
+        impactMs: Int64
     ) -> Double {
-        // gyroscope の gz を回外/回内の主成分とみなして小窓積分（近似）
         guard !imuHistory.isEmpty else { return 0.0 }
-        let win = imuHistory.filter { $0.monotonic_ms >= startMs && $0.monotonic_ms <= endMs }
-        guard win.count >= 3 else { return 0.0 }
-        var rad = 0.0
-        for i in 1..<win.count {
-            let dt = Double(win[i].monotonic_ms - win[i-1].monotonic_ms) / 1000.0
-            rad += abs(win[i].gz) * dt
+        
+        // 1. 開始時刻の検出：インパクトから2〜3秒前の間でGyroが0.1以下の瞬間
+        let searchWindowStart = impactMs - 3000  // 3秒前
+        let searchWindowEnd = impactMs - 2000    // 2秒前
+        
+        let startCandidates = imuHistory.filter { sample in
+            sample.monotonic_ms >= searchWindowStart &&
+            sample.monotonic_ms <= searchWindowEnd
         }
-        return rad * 180.0 / .pi
+        
+        var t_start: Int64?
+        for sample in startCandidates {
+            // 角速度の大きさ ||ω|| = sqrt(gx² + gy² + gz²)
+            let gyroMagnitude = sqrt(sample.gx * sample.gx + sample.gy * sample.gy + sample.gz * sample.gz)
+            if gyroMagnitude <= 0.1 {
+                t_start = sample.monotonic_ms
+                break
+            }
+        }
+        
+        // 開始時刻の決定（見つからない場合はデフォルト値を使用）
+        let t_start_unwrapped = t_start ?? (impactMs - 2500)
+        let t_impact = impactMs
+        
+        // 2. 測定区間のデータを取得
+        let measurementWindow = imuHistory.filter { sample in
+            sample.monotonic_ms >= t_start_unwrapped &&
+            sample.monotonic_ms <= t_impact
+        }
+        
+        guard measurementWindow.count > 3 else { return 0.0 }
+        
+        // 3. 各時点での角速度の大きさを計算
+        var gyroMagnitudes: [(time: Int64, magnitude: Double)] = []
+        for sample in measurementWindow {
+            let magnitude = sqrt(sample.gx * sample.gx + sample.gy * sample.gy + sample.gz * sample.gz)
+            gyroMagnitudes.append((time: sample.monotonic_ms, magnitude: magnitude))
+        }
+        
+        // 4. 角加速度を計算（簡易的に差分で近似）
+        var accelerations: [(time: Int64, acceleration: Double)] = []
+        for i in 1..<gyroMagnitudes.count {
+            let dt = Double(gyroMagnitudes[i].time - gyroMagnitudes[i-1].time) / 1000.0  // 秒に変換
+            if dt > 0 {
+                let dMag = gyroMagnitudes[i].magnitude - gyroMagnitudes[i-1].magnitude
+                let acceleration = abs(dMag / dt)  // 加速度の大きさ
+                accelerations.append((time: gyroMagnitudes[i].time, acceleration: acceleration))
+            }
+        }
+        
+        guard !accelerations.isEmpty else { return 0.0 }
+        
+        // 5. 最大加速度の時刻を検出
+        let maxAcceleration = accelerations.max(by: { $0.acceleration < $1.acceleration })
+        guard let t_peak = maxAcceleration?.time else { return 0.0 }
+        
+        // 6. 正規化時間 r を計算
+        let duration = Double(t_impact - t_start_unwrapped)
+        if duration <= 0 { return 0.0 }
+        
+        let r = Double(t_peak - t_start_unwrapped) / duration
+        
+        // r を 0〜1 の範囲にクランプ
+        return max(0.0, min(1.0, r))
     }
 
-    private static func scoreWristwork(_ deg: Double) -> Int {
-        // 目安：総回転 120–220° が高評価（不足/過多は減点）
-        if (120...220).contains(deg) { return 100 }
-        if (90..<120).contains(deg)  { return lerp(from: 70, to: 100, x: (deg-90)/30) }
-        if (220..<280).contains(deg) { return lerp(from: 100, to: 70, x: (deg-220)/60) }
-        if (60..<90).contains(deg)   { return lerp(from: 40, to: 70, x: (deg-60)/30) }
-        if (280..<360).contains(deg) { return lerp(from: 70, to: 40, x: (deg-280)/80) }
-        if deg < 60 { return max(0, Int(40 * deg / 60)) }
-        return max(0, Int(40 - (deg - 360) / 120 * 40))
+    /// ピーク加速タイミングのスコアリング
+    /// - Parameter r: 正規化時間（0〜1）
+    /// - Returns: スコア（0〜100）
+    private static func scorePeakAccelerationTiming(_ r: Double) -> Int {
+        // 設計書準拠:
+        // - 理想範囲 0.9〜1.0 → 100点固定
+        // - ピークが早い 0〜0.89 → (100×r)/0.9
+        // - 最低レベル r=0 → 0点固定
+        
+        if r >= 0.9 {
+            return 100
+        } else if r > 0 {
+            return Int((100.0 * r) / 0.9)
+        } else {
+            return 0
+        }
     }
 
     // MARK: - Helpers

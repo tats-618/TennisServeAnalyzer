@@ -136,9 +136,9 @@ struct AnalysisResultsView: View {
                 )
                 
                 metricRow(
-                    title: "8. リストワーク",
+                    title: "8. ピーク加速タイミング",
                     score: metrics.score8_wristwork,
-                    rawValue: String(format: "%.0f°", metrics.wristRotationDeg)
+                    rawValue: String(format: "%.1f%%時点", metrics.wristRotationDeg * 100)
                 )
             }
         }
@@ -306,169 +306,170 @@ struct AnalysisResultsView: View {
     }
     
     // MARK: - 🔧 Feedback Generation Logic (Based on Design PDF)
-    private func generatePrioritizedFeedback() -> [(title: String, message: String, score: Int)] {
-        var feedbackList: [(title: String, message: String, score: Int)] = []
-        
-        // 1. 右肘角度 [cite: 4-11]
-        if metrics.score1_elbowAngle < 100 {
-            // 360度系の場合は正規化が必要だが、ここではMetrics計算側で正規化済みと仮定するか、
-            // シンプルに設計書の境界値を使用。
-            // NOTE: 設計書では <89.9 or >110.1 で判定
-            let angle = normalizeAngle(metrics.elbowAngleDeg)
-            if angle < 90.0 {
-                feedbackList.append((
-                    title: "右肘の角度",
-                    message: "トロフィーポーズの時に右肘が曲がりすぎています。もっと肘を開きましょう。",
-                    score: metrics.score1_elbowAngle
-                ))
-            } else if angle > 110.0 {
-                feedbackList.append((
-                    title: "右肘の角度",
-                    message: "トロフィーポーズの時に右肘が伸びすぎています。もっと肘を曲げましょう。",
-                    score: metrics.score1_elbowAngle
-                ))
-            }
-        }
-        
-        // 2. 右脇角度 [cite: 12-20]
-        if metrics.score2_armpitAngle < 100 {
-            let angle = metrics.armpitAngleDeg
-            // 設計書: 90<=θ<170: 下がりすぎ, 190<θ<=270: 上がりすぎ
-            if angle >= 90 && angle < 170 {
-                feedbackList.append((
-                    title: "右脇の角度",
-                    message: "トロフィーポーズの時に右肘が下がりすぎています。もっと肘を上げましょう。",
-                    score: metrics.score2_armpitAngle
-                ))
-            } else if angle > 190 && angle <= 270 {
-                feedbackList.append((
-                    title: "右脇の角度",
-                    message: "トロフィーポーズの時に右肘が上がりすぎています。もっと肘を下げましょう。",
-                    score: metrics.score2_armpitAngle
-                ))
-            }
-        }
-        
-        // 3. 下半身貢献度 [cite: 21-26]
-        if metrics.score3_lowerBodyContribution < 100 {
-            let rise = metrics.pelvisRisePx
-            // 設計書: 0 < 50px (膝が曲がっていない)
-            if rise < 50.0 {
-                feedbackList.append((
-                    title: "下半身貢献度",
-                    message: "下半身のパワーが使えていません。膝を曲げて上にしっかり飛びましょう。",
-                    score: metrics.score3_lowerBodyContribution
-                ))
-            }
-        }
-        
-        // 4. 左手位置 [cite: 27-33]
-        if metrics.score4_leftHandPosition < 100 {
-            let shoulder = metrics.leftArmTorsoAngleDeg
-            let elbow = normalizeAngle(metrics.leftArmExtensionDeg) // 180度正規化と仮定
+        private func generatePrioritizedFeedback() -> [(title: String, message: String, score: Int)] {
+            var feedbackList: [(title: String, message: String, score: Int)] = []
             
-            var msgs: [String] = []
-            // i. 左肩判定
-            if (shoulder >= 0 && shoulder < 90) || (shoulder > 120 && shoulder < 270) {
-                msgs.append("トロフィーポーズの時は左腕を真上に伸ばしましょう。")
-            }
-            // ii. 左肘判定 (設計書: 0 <= θ < 170)
-            if elbow >= 0 && elbow < 170 {
-                msgs.append("トロフィーポーズの時は左腕を曲げずに真上に伸ばしましょう。")
+            // 1. 右肘角度 [cite: 4-11]
+            if metrics.score1_elbowAngle < 100 {
+                // 修正: ここにあった重複した if 文を削除しました
+                let angle = normalizeAngle(metrics.elbowAngleDeg)
+                if angle < 90.0 {
+                    feedbackList.append((
+                        title: "右肘の角度",
+                        message: "トロフィーポーズの時に右肘が曲がりすぎています。力を抜いてもっと肘を開きましょう。",
+                        score: metrics.score1_elbowAngle
+                    ))
+                } else if angle > 115.0 {
+                    feedbackList.append((
+                        title: "右肘の角度",
+                        message: "トロフィーポーズの時に右肘が伸びすぎています。ラケットを立てて両手で三角形を作るイメージでもっと肘を曲げましょう。",
+                        score: metrics.score1_elbowAngle
+                    ))
+                }
             }
             
-            if !msgs.isEmpty {
-                feedbackList.append((
-                    title: "左手位置",
-                    message: msgs.joined(separator: "\n"), // 複数該当時は改行で結合
-                    score: metrics.score4_leftHandPosition
-                ))
-            }
-        }
-        
-        // 5. 体軸傾き [cite: 34-42]
-        if metrics.score5_bodyAxisTilt < 100 {
-            let delta = metrics.bodyAxisDeviationDeg
-            // 設計書: Δθ > 15.1
-            if delta > 15.0 {
-                feedbackList.append((
-                    title: "体軸の傾き",
-                    message: "体が折れ曲がっています。ボールを打つ瞬間は体軸を真っ直ぐに保ちましょう。",
-                    score: metrics.score5_bodyAxisTilt
-                ))
-            }
-        }
-        
-        // 6. ラケット面角 [cite: 43-55]
-        if metrics.score6_racketFaceAngle < 100 {
-            let roll = metrics.racketFaceYawDeg
-            let pitch = metrics.racketFacePitchDeg
-            var msgs: [String] = []
-            
-            // i. Roll Left (-60 <= r < -5.1)
-            if roll >= -60 && roll < -5.0 {
-                msgs.append("ボールを打つ時にラケット面が左を向いています。真っ直ぐ打ちたい方向に向けましょう。")
-            }
-            // ii. Roll Right (+5.1 < r <= +60)
-            else if roll > 5.0 && roll <= 60 {
-                msgs.append("ボールを打つ時にラケット面が右を向いています。真っ直ぐ打ちたい方向に向けましょう。")
+            // 2. 右脇角度 [cite: 12-20]
+            if metrics.score2_armpitAngle < 100 {
+                let angle = metrics.armpitAngleDeg
+                // 設計書: 90<=θ<170: 下がりすぎ, 190<θ<=270: 上がりすぎ
+                if angle >= 90 && angle < 170 {
+                    feedbackList.append((
+                        title: "右脇の角度",
+                        message: "トロフィーポーズの時に右肘が下がりすぎています。肩と腕を一直線にするイメージで右肘を上げてみましょう。",
+                        score: metrics.score2_armpitAngle
+                    ))
+                } else if angle > 190 && angle <= 270 {
+                    feedbackList.append((
+                        title: "右脇の角度",
+                        message: "トロフィーポーズの時に右肘が上がりすぎています。力を抜いて肩と腕を一直線にするイメージで肘を落としてみましょう。",
+                        score: metrics.score2_armpitAngle
+                    ))
+                }
             }
             
-            // iii. Pitch Down (-60 <= p < -10.1)
-            if pitch >= -60 && pitch < -10.0 {
-                msgs.append("ラケット面が下を向いています。ボールがネットにかかりやすいです。")
-            }
-            // iv. Pitch Up (+10.1 < p <= +60)
-            else if pitch > 10.0 && pitch <= 60 {
-                msgs.append("ラケット面が上を向いています。高い打点で腕を伸ばして打ってみましょう。")
+            // 3. 下半身貢献度 [cite: 21-26]
+            if metrics.score3_lowerBodyContribution < 100 {
+                let rise = metrics.pelvisRisePx
+                // 設計書: 0 < 50px (膝が曲がっていない)
+                if rise < 50.0 {
+                    feedbackList.append((
+                        title: "下半身貢献度",
+                        message: "下半身のパワーが使えていません。ボールに胸をぶつけるイメージで膝を曲げてボールに向かってしっかり飛びましょう。",
+                        score: metrics.score3_lowerBodyContribution
+                    ))
+                }
             }
             
-            if !msgs.isEmpty {
-                feedbackList.append((
-                    title: "ラケット面の向き",
-                    message: msgs.joined(separator: "\n"),
-                    score: metrics.score6_racketFaceAngle
-                ))
+            // 4. 左手位置 [cite: 27-33]
+            if metrics.score4_leftHandPosition < 100 {
+                let shoulder = metrics.leftArmTorsoAngleDeg
+                let elbow = normalizeAngle(metrics.leftArmExtensionDeg) // 180度正規化と仮定
+                
+                var msgs: [String] = []
+                // i. 左肩判定
+                if (shoulder >= 0 && shoulder < 90) {
+                    msgs.append("トロフィーポーズの時は左腕を真上に伸ばしましょう。")
+                }
+                else if (shoulder > 120 && shoulder < 270)  {
+                    msgs.append("トロフィーポーズの時に左腕が下がってしまっています。打つ直前まで上に伸ばして残してあげましょう。")
+                }
+                // ii. 左肘判定 (設計書: 0 <= θ < 170)
+                if elbow >= 0 && elbow < 170 {
+                    msgs.append("トロフィーポーズの時は左腕を曲げずに真上に伸ばしましょう。")
+                }
+                
+                if !msgs.isEmpty {
+                    feedbackList.append((
+                        title: "左手位置",
+                        message: msgs.joined(separator: "\n"), // 複数該当時は改行で結合
+                        score: metrics.score4_leftHandPosition
+                    ))
+                }
             }
-        }
-        
-        // 7. トス位置 [cite: 56-63]
-        if metrics.score7_tossPosition < 100 {
-            let u_user = metrics.tossOffsetFromBaselinePx
             
-            // i. トスが後ろ (46px > u_user)
-            // 設計書では -54 < u < 46 の範囲が「後ろすぎ」判定エリア
-            if u_user < 46.0 {
-                 feedbackList.append((
-                    title: "トスの位置",
-                    message: "トスが後ろすぎます。前に上げて打ち下ろすように打ってみましょう。",
-                    score: metrics.score7_tossPosition
-                ))
+            // 5. 体軸傾き [cite: 34-42]
+            if metrics.score5_bodyAxisTilt < 100 {
+                let delta = metrics.bodyAxisDeviationDeg
+                // 設計書: Δθ > 15.1
+                if delta > 15.0 {
+                    feedbackList.append((
+                        title: "体軸の傾き",
+                        message: "体が折れ曲がっています。ボールを打つ瞬間は体軸を真っ直ぐに保ちましょう。",
+                        score: metrics.score5_bodyAxisTilt
+                    ))
+                }
             }
-            // ii. トスが前 (u_user > 57px)
-            // 設計書では 57 < u < 157 の範囲が「前すぎ」判定エリア
-            else if u_user > 57.0 {
-                feedbackList.append((
-                    title: "トスの位置",
-                    message: "トスが前に行きすぎです。もう少しトスを後ろに上げてみましょう。",
-                    score: metrics.score7_tossPosition
-                ))
+            
+            // 6. ラケット面角 [cite: 43-55]
+            if metrics.score6_racketFaceAngle < 100 {
+                let roll = metrics.racketFaceYawDeg
+                let pitch = metrics.racketFacePitchDeg
+                var msgs: [String] = []
+                
+                // i. Roll Left (-60 <= r < -10.1)
+                if roll >= -60 && roll < -10.0 {
+                    msgs.append("ボールを打つ時にラケット面が左を向いています。真っ直ぐ打ちたい方向に向けましょう。")
+                }
+                // ii. Roll Right (+10.1 < r <= +60)
+                else if roll > 10.0 && roll <= 60 {
+                    msgs.append("ボールを打つ時にラケット面が右を向いています。真っ直ぐ打ちたい方向に向けましょう。")
+                }
+                
+                if pitch >= -60 && pitch < -10.0 {
+                    msgs.append("ラケット面が下を向いています。ボールがネットにかかりやすいです。")
+                }
+                else if pitch > 10.0 && pitch <= 60 {
+                    msgs.append("ラケット面が上を向いています。高い打点で腕を伸ばして打ってみましょう。")
+                }
+                
+                if !msgs.isEmpty {
+                    feedbackList.append((
+                        title: "ラケット面の向き",
+                        message: msgs.joined(separator: "\n"),
+                        score: metrics.score6_racketFaceAngle
+                    ))
+                }
             }
-        }
-        
-        // 8. リストワーク (設計書テキストなし、既存ロジック維持)
-        if metrics.score8_wristwork < 60 {
-             feedbackList.append((
-                title: "リストワーク",
-                message: "手首の回内・回外動作がスムーズに使えていません。リラックスしてスイングしましょう。",
-                score: metrics.score8_wristwork
-            ))
-        }
+            
+            // 7. トス位置 [cite: 56-63]
+            if metrics.score7_tossPosition < 100 {
+                let u_user = metrics.tossOffsetFromBaselinePx
+                
+                // i. トスが後ろ (46px > u_user)
+                // 設計書では -54 < u < 46 の範囲が「後ろすぎ」判定エリア
+                if u_user < 46.0 {
+                    feedbackList.append((
+                        title: "トスの位置",
+                        message: "トスが後ろすぎます。前に上げて打ち下ろすように打ってみましょう。",
+                        score: metrics.score7_tossPosition
+                    ))
+                }
+                // ii. トスが前 (u_user > 57px)
+                // 設計書では 57 < u < 157 の範囲が「前すぎ」判定エリア
+                else if u_user > 57.0 {
+                    feedbackList.append((
+                        title: "トスの位置",
+                        message: "トスが前に行きすぎです。もう少しトスを後ろに上げてみましょう。",
+                        score: metrics.score7_tossPosition
+                    ))
+                }
+            }
+            
+            // 8. ピーク加速タイミング
+            if metrics.score8_wristwork < 100 {
+                let r = metrics.wristRotationDeg
+                if r < 0.9 {
+                    feedbackList.append((
+                        title: "ピーク加速タイミング",
+                        message: "加速のピークが早すぎます。力を抜いて、鞭のようなイメージでスイング後半に向けて力を伝えましょう。",
+                        score: metrics.score8_wristwork
+                    ))
+                }
+            }
 
-        // スコアが低い順（改善が必要な順）にソートし、上位2つを返す
-        return Array(feedbackList.sorted { $0.score < $1.score }.prefix(2))
-    }
-    
+            // スコアが低い順（改善が必要な順）にソートし、上位2つを返す
+            return Array(feedbackList.sorted { $0.score < $1.score }.prefix(2))
+        }
     // Helper for angle normalization if needed
     private func normalizeAngle(_ angle: Double) -> Double {
         if angle <= 180.0 { return angle }

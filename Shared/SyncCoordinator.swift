@@ -2,14 +2,7 @@
 //  SyncCoordinator.swift
 //  TennisServeAnalyzer
 //
-//  Created by 島本健生 on 2025/10/22.
-//
-
-//
-//  SyncCoordinator.swift
-//  TennisServeAnalyzer
-//
-//  P1: 時刻同期マネージャー
+//  P1: 時刻同期マネージャー（NTP方式対応）
 //
 
 import Foundation
@@ -38,6 +31,18 @@ struct TimeSyncInfo: Codable {
         self.wallclock_iso = wallclock_iso
         self.sync_version = sync_version
     }
+}
+
+/// NTP同期リクエスト
+struct NTPSyncRequest: Codable {
+    let t1: Double  // iOS送信時刻
+}
+
+/// NTP同期レスポンス
+struct NTPSyncResponse: Codable {
+    let t1: Double  // iOS送信時刻（エコーバック）
+    let t2: Double  // Watch受信時刻
+    let t3: Double  // Watch返信時刻
 }
 
 /// 軽打同期イベント
@@ -85,6 +90,29 @@ class SyncCoordinator {
     /// Watch側で最初のモーションタイムスタンプを受信したか
     private var hasSetInitialMotionTimestamp = false
     
+    // MARK: - NTP-like Time Sync
+    
+    /// iOS-Watch間の時刻オフセット（秒）
+    /// Offset = Watch時刻 - iOS時刻
+    private(set) var timeOffset: Double = 0.0
+    
+    /// 同期品質（RTT）
+    private(set) var syncQuality: Double = 0.0
+    
+    /// 同期完了フラグ
+    private(set) var isSyncComplete: Bool = false
+    
+    /// 同期試行回数
+    private var syncAttempts: Int = 0
+    private let maxSyncAttempts: Int = 5
+    private let maxAcceptableRTT: Double = 0.100  // 100ms
+    
+    /// 同期進行中フラグ
+    private var isSyncInProgress: Bool = false
+    
+    /// 同期コールバック
+    private var syncCompletionHandlers: [(Bool) -> Void] = []
+    
     private init() {}
     
     // MARK: - iPhone側メソッド
@@ -120,6 +148,113 @@ class SyncCoordinator {
             return event
         }
         return nil
+    }
+    
+    // MARK: - NTP Time Sync (iOS側)
+    
+    /// NTP方式の時刻同期を開始
+    /// - Parameter completion: 同期完了時のコールバック（成功/失敗）
+    func performNTPSync(sendMessageHandler: @escaping (NTPSyncRequest, @escaping (NTPSyncResponse?) -> Void) -> Void, completion: @escaping (Bool) -> Void) {
+        guard !isSyncInProgress else {
+            print("⚠️ NTP sync already in progress")
+            syncCompletionHandlers.append(completion)
+            return
+        }
+        
+        isSyncInProgress = true
+        syncCompletionHandlers.append(completion)
+        syncAttempts = 0
+        
+        attemptNTPSync(sendMessageHandler: sendMessageHandler)
+    }
+    
+    private func attemptNTPSync(sendMessageHandler: @escaping (NTPSyncRequest, @escaping (NTPSyncResponse?) -> Void) -> Void) {
+        syncAttempts += 1
+        
+        if syncAttempts > maxSyncAttempts {
+            print("❌ NTP sync failed after \(maxSyncAttempts) attempts")
+            finishSync(success: false)
+            return
+        }
+        
+        // t1: iOS送信時刻
+        let t1 = ProcessInfo.processInfo.systemUptime
+        let request = NTPSyncRequest(t1: t1)
+        
+        print("📤 NTP sync attempt \(syncAttempts): t1=\(String(format: "%.6f", t1))")
+        
+        // Watchへ送信してレスポンスを待つ
+        sendMessageHandler(request) { [weak self] response in
+            guard let self = self, let response = response else {
+                print("❌ NTP sync: no response")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self?.attemptNTPSync(sendMessageHandler: sendMessageHandler)
+                }
+                return
+            }
+            
+            // t4: iOS受信時刻
+            let t4 = ProcessInfo.processInfo.systemUptime
+            
+            self.processNTPResponse(response: response, t4: t4, sendMessageHandler: sendMessageHandler)
+        }
+    }
+    
+    private func processNTPResponse(response: NTPSyncResponse, t4: Double, sendMessageHandler: @escaping (NTPSyncRequest, @escaping (NTPSyncResponse?) -> Void) -> Void) {
+        let t1 = response.t1
+        let t2 = response.t2
+        let t3 = response.t3
+        
+        // RTT = (t4 - t1) - (t3 - t2)
+        let rtt = (t4 - t1) - (t3 - t2)
+        
+        // Offset = ((t2 - t1) + (t3 - t4)) / 2
+        let offset = ((t2 - t1) + (t3 - t4)) / 2.0
+        
+        print("📊 NTP sync result:")
+        print("   t1 (iOS send):  \(String(format: "%.6f", t1))")
+        print("   t2 (Watch recv): \(String(format: "%.6f", t2))")
+        print("   t3 (Watch send): \(String(format: "%.6f", t3))")
+        print("   t4 (iOS recv):   \(String(format: "%.6f", t4))")
+        print("   RTT: \(String(format: "%.3f", rtt * 1000))ms")
+        print("   Offset: \(String(format: "%.3f", offset * 1000))ms")
+        
+        // RTT品質チェック
+        if rtt > maxAcceptableRTT {
+            print("⚠️ RTT too high (\(String(format: "%.1f", rtt * 1000))ms), retrying...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.attemptNTPSync(sendMessageHandler: sendMessageHandler)
+            }
+            return
+        }
+        
+        // 同期成功
+        self.timeOffset = offset
+        self.syncQuality = rtt
+        self.isSyncComplete = true
+        
+        print("✅ NTP sync complete: offset=\(String(format: "%.3f", offset * 1000))ms, quality=\(String(format: "%.1f", rtt * 1000))ms")
+        
+        finishSync(success: true)
+    }
+    
+    private func finishSync(success: Bool) {
+        isSyncInProgress = false
+        
+        let handlers = syncCompletionHandlers
+        syncCompletionHandlers.removeAll()
+        
+        for handler in handlers {
+            handler(success)
+        }
+    }
+    
+    /// WatchタイムスタンプをiOSタイムスタンプに変換
+    /// - Parameter watchTime: Watch側のsystemUptime
+    /// - Returns: iOS側のsystemUptimeに変換された時刻
+    func convertWatchTimeToiOS(_ watchTime: Double) -> Double? {
+        guard isSyncComplete else { return nil }
+        return watchTime - timeOffset
     }
     
     // MARK: - Watch側メソッド
@@ -250,6 +385,15 @@ class SyncCoordinator {
         corrections.removeAll()
         currentDelta = 0.0
         hasSetInitialMotionTimestamp = false
+        
+        // NTP同期リセット
+        timeOffset = 0.0
+        syncQuality = 0.0
+        isSyncComplete = false
+        syncAttempts = 0
+        isSyncInProgress = false
+        syncCompletionHandlers.removeAll()
+        
         print("🔄 SyncCoordinator reset")
     }
     
@@ -264,6 +408,10 @@ class SyncCoordinator {
         tap_events: \(tapEvents.count)
         corrections: \(corrections.count)
         has_initial_motion: \(hasSetInitialMotionTimestamp)
+        --- NTP Sync ---
+        is_complete: \(isSyncComplete)
+        time_offset: \(String(format: "%.3f", timeOffset * 1000))ms
+        sync_quality: \(String(format: "%.1f", syncQuality * 1000))ms RTT
         """
     }
 }

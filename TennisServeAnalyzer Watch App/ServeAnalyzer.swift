@@ -6,6 +6,7 @@
 //  🚀 Audio機能を全削除し、IMUの衝撃検知のみで実装
 //  📊 スイング効率分析: 構え(Start)〜インパクト(End)で正規化 (0.0~1.0)
 //  🎯 スイング速度(Gyro)と衝撃(Accel Jerk)を監視してインパクトを特定
+//  🔧 NTP同期: インパクト時のタイムスタンプ、ラケット角度、ピーク位置をiOSへ送信
 //
 
 import Foundation
@@ -36,13 +37,10 @@ final class ServeAnalyzer: ObservableObject {
     // 面角表示
     @Published var lastFaceYawDeg: Float = 0.0     // Roll
     @Published var lastFacePitchDeg: Float = 0.0   // Pitch
-    
-    // UI側での参照エラーを防ぐため変数は残すが、更新はしない
     @Published var lastFaceAdvice: String = ""
 
     // ★ Peak Position (r) 表示用
     @Published var lastPeakPositionR: Double = 0.0
-    // UI側での参照エラーを防ぐため変数は残すが、更新はしない
     @Published var lastPeakEvalText: String = ""
 
     // MARK: - Internals
@@ -67,9 +65,6 @@ final class ServeAnalyzer: ObservableObject {
         let userAccelMag: Double // ユーザー加速度の大きさ (G)
     }
     private var attBuffer: [AttSample] = []
-    
-    // 3秒前まで遡って「構え」を探すため、バッファサイズを確保
-    // 200Hz * 4.0秒 = 800サンプル
     private let attBufferMax = 800
 
     // 時間変換用
@@ -89,9 +84,13 @@ final class ServeAnalyzer: ObservableObject {
     // 前回の加速度（変化量計算用）
     private var lastUserAccelMag: Double = 0.0
 
+    // ★ NTP同期用: インパクト時のデータ保存
+    private var currentImpactTimestamp: TimeInterval?
+    private var currentPeakPositionR: Double = 0.0
+
     // MARK: - Init
     init() {
-        print("⌚ ServeAnalyzer init (IMU Impact + Normalized Analysis)")
+        print("⌚ ServeAnalyzer init (IMU Impact + Normalized Analysis + NTP Sync)")
         connectionStatusText = (watchManager.session?.isReachable ?? false) ? "iPhone接続" : "未接続"
         startStatusTimer()
     }
@@ -139,14 +138,17 @@ final class ServeAnalyzer: ObservableObject {
         lastFaceYawDeg = 0
         lastFacePitchDeg = 0
         lastFaceAdvice = ""
-        // ★ Peak Position 初期化
         lastPeakPositionR = 0.0
         lastPeakEvalText = ""
+        
+        // NTP同期用データリセット
+        currentImpactTimestamp = nil
+        currentPeakPositionR = 0.0
 
         isRecording = true
         collectionState = DataCollectionState.collecting
         statusHeader = "📊 Recording"
-        print("✅ Recording started (IMU Only)")
+        print("✅ Recording started (IMU Only + NTP Sync)")
     }
 
     func stopRecording() {
@@ -159,6 +161,9 @@ final class ServeAnalyzer: ObservableObject {
         let duration = startTime.map { -$0.timeIntervalSinceNow } ?? 0
         print("✅ Recording stopped (elapsed: \(String(format: "%.1f", duration))s)")
         statusHeader = "⏹ Stopped"
+        
+        // インパクトデータをiOSへ送信
+        sendAnalysisToiOS()
     }
 
     // MARK: - IMU Lifecyle
@@ -180,7 +185,6 @@ final class ServeAnalyzer: ObservableObject {
     
     // MARK: - IMU Processing Loop
     private func processDeviceMotion(_ dm: CMDeviceMotion) {
-        // 1. データ抽出
         let R = attitudeToR(dm.attitude)
         let t = dm.timestamp
         
@@ -194,18 +198,14 @@ final class ServeAnalyzer: ObservableObject {
         let az = dm.userAcceleration.z
         let userAccelMag = sqrt(ax*ax + ay*ay + az*az)
         
-        // バッファに追加
         attBuffer.append(.init(t: t, R: R, gyroMag: gyroMag, userAccelMag: userAccelMag))
         if attBuffer.count > attBufferMax {
             attBuffer.removeFirst(attBuffer.count - attBufferMax)
         }
         
-        // 2. ヒット判定ロジック (Recording中のみ)
         if isRecording {
             detectImpactFromMotion(t: t, gyroMag: gyroMag, userAccelMag: userAccelMag)
             
-            // リアルタイムログ出力（間引き）
-            // 0.005秒 = 5ms = 200Hz (実質全データ出力)
             if t - lastLogTimestamp > 0.005 {
                 lastLogTimestamp = t
                 let tMs = Int64(t * 1000)
@@ -224,7 +224,6 @@ final class ServeAnalyzer: ObservableObject {
     private func detectImpactFromMotion(t: TimeInterval, gyroMag: Double, userAccelMag: Double) {
         if t - lastHitTime < hitDebounceTime { return }
         
-        // 「直近0.2秒間の最大スイング速度」を確認する
         let lookBackWindow = 0.2
         let maxRecentGyro = attBuffer
             .filter { $0.t >= t - lookBackWindow }
@@ -238,21 +237,20 @@ final class ServeAnalyzer: ObservableObject {
         if deltaAccel > impactShockThreshold {
             lastHitTime = t
             
-            // ピークサーチでインパクト時刻を特定
             if let bestSample = findBestImpactSample(triggerTime: t),
                let angles = calculateFaceAngles(from: bestSample.R) {
-                
-                // アドバイス生成は削除
                 
                 DispatchQueue.main.async { [weak self] in
                     self?.lastFaceYawDeg = angles.roll
                     self?.lastFacePitchDeg = angles.pitch
-                    // アドバイス更新削除
                     WKInterfaceDevice.current().play(.success)
                 }
                 
                 let triggerMs = Int64(t * 1000)
                 let bestMs = Int64(bestSample.t * 1000)
+                
+                // ★ NTP同期用: インパクトタイムスタンプを保存
+                currentImpactTimestamp = bestSample.t
                 
                 print("\n🔥🔥🔥 IMPACT DETECTED (IMU) 🔥🔥🔥")
                 print(String(format: "🎯 HIT @ %lldms (Trig:%lld) | Gyro=%.1f (MaxRecent:%.1f) | ΔAcc=%.1f | 左右=%.1f°, 上下=%.1f°",
@@ -277,7 +275,6 @@ final class ServeAnalyzer: ObservableObject {
             return nil
         }
         
-        // 最大加速の直後(約20ms後)をインパクトとする
         let targetTime = maxGyroSample.t + 0.02
         return attBuffer.min(by: { abs($0.t - targetTime) < abs($1.t - targetTime) })
     }
@@ -334,13 +331,42 @@ final class ServeAnalyzer: ObservableObject {
         print(String(format: "⚡ Peak Accel: %.1f rad/s²", maxAccel))
         print(String(format: "📍 Peak Position (r): %.3f", r))
         
-        // 評価テキスト生成ロジックは削除
-
-        // ★ UI へ反映
         DispatchQueue.main.async { [weak self] in
             self?.lastPeakPositionR = r
-            // 評価テキスト更新削除
         }
+        
+        // ★ iOSへ送信するためにrを保存
+        self.currentPeakPositionR = r
+    }
+    
+    // MARK: - Send Analysis to iOS
+    private func sendAnalysisToiOS() {
+        guard let impactTime = currentImpactTimestamp else {
+            print("⚠️ No impact detected, skipping analysis send")
+            return
+        }
+        
+        let duration = startTime.map { -$0.timeIntervalSinceNow } ?? 0
+        
+        let analysis = ServeAnalysis(
+            maxAcceleration: 0.0,  // ダミー値（必要に応じて実装）
+            maxAngularVelocity: 0.0,  // ダミー値
+            estimatedSwingSpeed: 0.0,  // ダミー値
+            duration: duration,
+            recordedAt: Date(),
+            impactTimestamp: impactTime,
+            impactRacketYaw: Double(lastFaceYawDeg),
+            impactRacketPitch: Double(lastFacePitchDeg),
+            swingPeakPositionR: currentPeakPositionR
+        )
+        
+        watchManager.sendAnalysisResult(analysis)
+        
+        print("📤 Sent analysis to iOS:")
+        print("   Impact timestamp: \(String(format: "%.6f", impactTime))s")
+        print("   Racket yaw: \(String(format: "%.1f", lastFaceYawDeg))°")
+        print("   Racket pitch: \(String(format: "%.1f", lastFacePitchDeg))°")
+        print("   Peak position (r): \(String(format: "%.3f", currentPeakPositionR))")
     }
 
     private func stopIMU() {
@@ -470,6 +496,8 @@ final class ServeAnalyzer: ObservableObject {
         lastFaceAdvice = ""
         lastPeakPositionR = 0.0
         lastPeakEvalText = ""
+        currentImpactTimestamp = nil
+        currentPeakPositionR = 0.0
         statusHeader = "⏸ Idle"
         statusDetail = "リセット完了"
         collectionState = .idle

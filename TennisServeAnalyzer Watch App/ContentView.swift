@@ -1,192 +1,285 @@
+//
+//  ContentView.swift
+//  TennisServeAnalyzer Watch App
+//
+//  🎨 Modern UI Redesign
+//  - 洗練されたダッシュボードデザイン
+//  - キャリブレーションのウィザード形式化
+//  - 測定ボタンの完全削除（iPhoneリモート制御専用）
+//
+
 import SwiftUI
 
 struct ContentView: View {
     @StateObject private var analyzer = ServeAnalyzer()
     @StateObject private var watchManager = WatchConnectivityManager.shared
 
+    // 録画中の点滅アニメーション用ステート
+    @State private var isPulsing = false
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 10) {
+            VStack(spacing: 12) {
+                // 1. ステータスバー (接続状態・REC表示)
+                statusBarSection
 
-                // ① 起動 → 接続/サンプリング確認
-                headerStatusSection
-
-                // ②〜⑦ キャリブ・ガイダンス
-                calibrationSection
-
-                // ⑧ 測定
-                measureSection
+                // 2. メインコンテンツ (状態に応じて切り替え)
+                if analyzer.calibStage == .ready || analyzer.isRecording {
+                    // 測定モード（待機中または録画中）
+                    measurementDashboard
+                } else {
+                    // キャリブレーションモード
+                    calibrationWizard
+                }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal)
             .padding(.vertical, 8)
         }
+        .background(Color.black) // 背景色を黒で統一
         .onAppear {
-            print("⌚ Watch ContentView appeared")
-            // iPhoneからのリモート操作（必要に応じて）
-            watchManager.onStartRecording = { [weak analyzer] in analyzer?.startRecording() }
-            watchManager.onStopRecording  = { [weak analyzer] in analyzer?.stopRecording() }
-            watchManager.requestTimeSyncFromPhone { ok in
-                print(ok ? "✅ Time sync successful" : "⚠️ Time sync failed")
-            }
+            setupConnectivity()
         }
     }
 
-    // MARK: - Sections
+    // MARK: - Setup
+    private func setupConnectivity() {
+        print("⌚ Watch ContentView appeared")
+        watchManager.onStartRecording = { [weak analyzer] in analyzer?.startRecording() }
+        watchManager.onStopRecording  = { [weak analyzer] in analyzer?.stopRecording() }
+        watchManager.requestTimeSyncFromPhone { _ in }
+    }
 
-    private var headerStatusSection: some View {
-        VStack(spacing: 6) {
+    // MARK: - 1. Status Bar Section
+    private var statusBarSection: some View {
+        HStack {
+            // 左側: 接続アイコン + 状態テキスト
             HStack(spacing: 6) {
-                Circle().fill((watchManager.session?.isReachable ?? false) ? Color.green : Color.red)
-                    .frame(width: 6, height: 6)
-                Text(analyzer.connectionStatusText)
-                    .font(.system(size: 10)).foregroundColor(.white)
-                Spacer()
-                Text(analyzer.samplingStatus)
-                    .font(.system(size: 10)).foregroundColor(.gray)
-            }
-            .padding(6).background(Color.black.opacity(0.25)).cornerRadius(8)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(analyzer.statusHeader)
-                    .font(.caption).fontWeight(.semibold).foregroundColor(.white)
-                Text(analyzer.statusDetail)
-                    .font(.system(size: 10)).foregroundColor(.gray)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var calibrationSection: some View {
-        VStack(spacing: 8) {
-            // ガイダンス
-            Group {
-                switch analyzer.calibStage {
-                case .idle:
-                    Text("キャリブ前：まず“水平キャリブレーション”")
-                        .font(.system(size: 10)).foregroundColor(.gray)
-                case .levelPrompt:
-                    Text("指示：Watch画面を上向きにして地面に置く → “水平登録”")
-                        .font(.system(size: 10)).foregroundColor(.yellow)
-                case .levelDone:
-                    Text("水平登録完了 → 次に“方向キャリブレーション”")
-                        .font(.system(size: 10)).foregroundColor(.green)
-                case .dirPrompt:
-                    Text("指示：ラケットを立てて狙う方向へ面を向ける → “方向登録”")
-                        .font(.system(size: 10)).foregroundColor(.yellow)
-                case .dirDone:
-                    Text("方向登録完了 → “キャリブ終了”で準備完了")
-                        .font(.system(size: 10)).foregroundColor(.green)
-                case .ready:
-                    Text("キャリブ終了：準備完了。記録開始できます。")
-                        .font(.system(size: 10)).foregroundColor(.cyan)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            // ボタン群
-            VStack(spacing: 6) {
-                HStack {
-                    Button("水平キャリブレーション") { analyzer.beginCalibLevel() }
-                        .buttonStylePrimary(color: .blue)
-                    Button("水平登録") { analyzer.commitCalibLevel() }
-                        .buttonStyleSecondary(disabled: !analyzerHasStage(.levelPrompt))
-                        .disabled(!analyzerHasStage(.levelPrompt))
-                }
-
-                HStack {
-                    Button("方向キャリブレーション") { analyzer.beginCalibDirection() }
-                        .buttonStylePrimary(color: .indigo)
-                        .disabled(!analyzer.hasLevelCalib)
-                    Button("方向登録") { analyzer.commitCalibDirection() }
-                        .buttonStyleSecondary(disabled: !analyzerHasStage(.dirPrompt))
-                        .disabled(!analyzerHasStage(.dirPrompt))
-                }
-
-                Button("キャリブレーション終了（準備完了）") { analyzer.finishCalibration() }
-                    .buttonStylePrimary(color: .green)
-                    .disabled(!(analyzer.hasLevelCalib && analyzer.hasDirCalib))
-            }
-        }
-        .padding(8)
-        .background(Color.black.opacity(0.25))
-        .cornerRadius(10)
-    }
-
-    private var measureSection: some View {
-        VStack(spacing: 10) {
-            // 面角の簡易表示（ヒット後）
-            VStack(spacing: 2) {
-                Text(String(format: "面角 yaw %.1f° / pitch %.1f°",
-                            analyzer.lastFaceYawDeg, analyzer.lastFacePitchDeg))
-                    .font(.system(size: 11)).foregroundColor(.white)
-
-                // ★ Peak Position (r) 表示
-                Text(String(format: "Peak Position r = %.3f", analyzer.lastPeakPositionR))
-                    .font(.system(size: 11))
-                    .foregroundColor(.cyan)
-
-                // ★ 評価コメントも表示（必要なければこのブロックは削ってOK）
-                if !analyzer.lastPeakEvalText.isEmpty {
-                    Text(analyzer.lastPeakEvalText)
-                        .font(.system(size: 11))
-                        .foregroundColor(.yellow)
-                }
-
-                if !analyzer.lastFaceAdvice.isEmpty {
-                    Text(analyzer.lastFaceAdvice)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.yellow)
-                }
-            }
-            .padding(6).background(Color.black.opacity(0.25)).cornerRadius(8)
-
-            // 記録ボタン（キャリブ完了で有効化）
-            Button(action: {
+                Image(systemName: (watchManager.session?.isReachable ?? false) ? "iphone.gen3" : "iphone.slash")
+                    .font(.system(size: 14))
+                    .foregroundColor((watchManager.session?.isReachable ?? false) ? .green : .gray)
+                
                 if analyzer.isRecording {
-                    print("⏹ User tapped Stop")
-                    analyzer.stopRecording()
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 8, height: 8)
+                            .opacity(isPulsing ? 1.0 : 0.3)
+                        Text("REC")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                    }
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                            isPulsing = true
+                        }
+                    }
                 } else {
-                    print("🎬 User tapped Start")
-                    analyzer.startRecording()
+                    Text(analyzer.connectionStatusText)
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundColor(.secondary)
                 }
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: analyzer.isRecording ? "stop.circle.fill" : "record.circle")
-                        .font(.caption)
-                    Text(analyzer.isRecording ? "停止" : "記録開始")
-                        .font(.caption).fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(analyzer.isRecording ? Color.red : (analyzer.calibStage == .ready ? Color.green : Color.gray))
-                .foregroundColor(.white)
-                .cornerRadius(8)
             }
-            .disabled(!(analyzer.calibStage == .ready || analyzer.isRecording))
+            
+            Spacer()
+            
+            // 右側: サンプリングレート
+            if analyzer.effectiveSampleRate > 0 {
+                Text("\(Int(analyzer.effectiveSampleRate))Hz")
+                    .font(.system(size: 12, design: .monospaced))
+                    .fontWeight(.medium)
+                    .foregroundColor(.green)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - 2. Calibration Wizard Section
+    private var calibrationWizard: some View {
+        VStack(spacing: 12) {
+            // 進捗インジケータ（簡易版）
+            HStack(spacing: 4) {
+                Capsule().fill(analyzer.hasLevelCalib ? Color.blue : Color.gray.opacity(0.3)).frame(height: 4)
+                Capsule().fill(analyzer.hasDirCalib ? Color.blue : Color.gray.opacity(0.3)).frame(height: 4)
+                Capsule().fill((analyzer.calibStage == .ready) ? Color.green : Color.gray.opacity(0.3)).frame(height: 4)
+            }
+            .padding(.bottom, 4)
+
+            // ステップごとのカード表示
+            switch analyzer.calibStage {
+            case .idle:
+                actionCard(
+                    icon: "level",
+                    title: "水平キャリブレーション",
+                    description: "測定を開始する前に、ラケットの水平位置を登録します。",
+                    buttonTitle: "開始する",
+                    color: .blue
+                ) {
+                    analyzer.beginCalibLevel()
+                }
+
+            case .levelPrompt:
+                actionCard(
+                    icon: "arrow.down.to.line.compact",
+                    title: "水平登録",
+                    description: "ラケット面を上にして地面に置き、登録ボタンを押してください。",
+                    buttonTitle: "登録",
+                    color: .blue
+                ) {
+                    analyzer.commitCalibLevel()
+                }
+
+            case .levelDone:
+                actionCard(
+                    icon: "arrow.up.and.down.and.arrow.left.and.right",
+                    title: "方向キャリブレーション",
+                    description: "次に、打つ方向（ターゲット）を登録します。",
+                    buttonTitle: "次へ",
+                    color: .orange
+                ) {
+                    analyzer.beginCalibDirection()
+                }
+
+            case .dirPrompt:
+                actionCard(
+                    icon: "location.north.line.fill",
+                    title: "方向登録",
+                    description: "ラケットを立てて、打つ方向に面を向けてください。",
+                    buttonTitle: "登録",
+                    color: .orange
+                ) {
+                    analyzer.commitCalibDirection()
+                }
+
+            case .dirDone:
+                actionCard(
+                    icon: "checkmark.seal.fill",
+                    title: "設定完了",
+                    description: "すべての設定が完了しました。",
+                    buttonTitle: "完了して待機",
+                    color: .green
+                ) {
+                    analyzer.finishCalibration()
+                }
+
+            default:
+                EmptyView()
+            }
         }
     }
 
-    // Helper
-    private func analyzerHasStage(_ stage: ServeAnalyzer.CalibStage) -> Bool {
-        analyzer.calibStage == stage
+    // MARK: - 3. Measurement Dashboard Section
+    private var measurementDashboard: some View {
+        VStack(spacing: 16) {
+            // メインステータス表示
+            ZStack {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.gray.opacity(0.15))
+                
+                VStack(spacing: 8) {
+                    if analyzer.isRecording {
+                        Image(systemName: "figure.tennis")
+                            .font(.system(size: 36))
+                            .foregroundColor(.white)
+                        Text("測定中...")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+                            .font(.system(size: 28))
+                            .foregroundColor(.blue)
+                        Text("iPhone待機中")
+                            .font(.headline)
+                        Text("iPhone側で\n測定を開始してください")
+                            .font(.caption2)
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding()
+            }
+            .frame(minHeight: 120)
+
+            // 直前のデータ表示（ヒット後のみ表示）
+            if analyzer.lastPeakPositionR != 0 {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("LAST SHOT")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.secondary)
+                    
+                    HStack {
+                        metricView(label: "Roll", value: String(format: "%.0f°", analyzer.lastFaceYawDeg))
+                        Divider().background(Color.gray)
+                        metricView(label: "Pitch", value: String(format: "%.0f°", analyzer.lastFacePitchDeg))
+                    }
+                    
+                    Divider().background(Color.gray.opacity(0.5))
+                    
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Accel Peak (r)")
+                                .font(.system(size: 10))
+                                .foregroundColor(.orange)
+                            Text(String(format: "%.3f", analyzer.lastPeakPositionR))
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
+                                .foregroundColor(.white)
+                        }
+                        Spacer()
+                    }
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(12)
+            }
+        }
+    }
+
+    // MARK: - Helper Views
+
+    // カードスタイルのアクションビュー
+    private func actionCard(icon: String, title: String, description: String, buttonTitle: String, color: Color, action: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                Image(systemName: icon)
+                    .font(.title2)
+                    .foregroundColor(color)
+                    .frame(width: 32, height: 32)
+                    .background(color.opacity(0.2))
+                    .clipShape(Circle())
+                
+                Text(title)
+                    .font(.headline)
+                    .fontWeight(.bold)
+            }
+            
+            Text(description)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            
+            Button(action: action) {
+                Text(buttonTitle)
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(color)
+            .padding(.top, 4)
+        }
+        .padding()
+        .background(Color.gray.opacity(0.15))
+        .cornerRadius(16)
+    }
+
+    // 数値表示用コンポーネント
+    private func metricView(label: String, value: String) -> some View {
+        VStack(alignment: .leading) {
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundColor(.cyan)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
-
-// MARK: - Button Styles
-fileprivate extension Button {
-    func buttonStylePrimary(color: Color) -> some View {
-        self.font(.system(size: 11, weight: .semibold))
-            .padding(.vertical, 6).padding(.horizontal, 8)
-            .background(color.opacity(0.9))
-            .foregroundColor(.white)
-            .cornerRadius(8)
-    }
-    func buttonStyleSecondary(disabled: Bool) -> some View {
-        self.font(.system(size: 11, weight: .semibold))
-            .padding(.vertical, 6).padding(.horizontal, 8)
-            .background(disabled ? Color.gray.opacity(0.5) : Color.orange.opacity(0.9))
-            .foregroundColor(.white)
-            .cornerRadius(8)
-    }
-}
-
