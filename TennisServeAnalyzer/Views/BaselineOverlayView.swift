@@ -15,6 +15,7 @@ struct BaselineOverlayView: View {
     private let lineColor = Color.red
     private let lineWidth: CGFloat = 3
     private let shadowRadius: CGFloat = 4
+    private let brandAccent = Color(red: 0.8, green: 1.0, blue: 0.0) // Tennis Ball Green
     
     var body: some View {
         GeometryReader { geometry in
@@ -26,7 +27,7 @@ struct BaselineOverlayView: View {
                 gridLines(in: geometry.size)
                 
                 // 説明テキスト
-                instructionText(in: geometry.size)
+                instructionLayer
             }
         }
     }
@@ -110,74 +111,52 @@ struct BaselineOverlayView: View {
         }
     }
     
-    // MARK: - 説明テキスト
-    private func instructionText(in size: CGSize) -> some View {
-        VStack {
-            // 上部の説明
-            VStack(spacing: 8) {
-                Text("📍 カメラ設置")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
+    // MARK: - 3. Instruction Layer
+        private var instructionLayer: some View {
+            VStack {
+                Spacer()
                 
-                Text("赤い線をベースラインに合わせてください")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
-                
-                Text("ベースライン = サーブを打つ位置の基準線")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
-            }
-            .padding(.vertical, 20)
-            .padding(.horizontal, 30)
-            .background(
-                RoundedRectangle(cornerRadius: 15)
-                    .fill(Color.black.opacity(0.6))
-                    .shadow(color: .black.opacity(0.3), radius: 8)
-            )
-            .padding(.top, 60)
-            
-            Spacer()
-            
-            // 下部の詳細ガイド
-            VStack(spacing: 12) {
-                HStack(spacing: 12) {
-                    Image(systemName: "camera.viewfinder")
-                        .font(.title2)
-                        .foregroundColor(lineColor)
+                // ガイドテキスト
+                HStack(spacing: 16) {
+                    // アイコンエリア
+                    ZStack {
+                        Circle()
+                            .fill(brandAccent.opacity(0.2))
+                            .frame(width: 44, height: 44)
+                        
+                        Image(systemName: "lines.measurement.horizontal")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundColor(brandAccent)
+                    }
                     
+                    // テキストエリア
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("設置のポイント")
-                            .font(.headline)
+                        Text("ベースラインに合わせてください")
+                            .font(.system(.subheadline, design: .rounded))
+                            .fontWeight(.bold)
                             .foregroundColor(.white)
                         
-                        Text("• 赤い線とベースラインを合わせる")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.9))
-                        
-                        Text("• カメラは真横から水平に")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.9))
-                        
-                        Text("• 全身が映る高さに調整")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.9))
+                        Text("赤の線が基準になります")
+                            .font(.system(.caption, design: .rounded))
+                            .fontWeight(.medium)
+                            .foregroundColor(.white.opacity(0.7))
                     }
+                    
+                    Spacer()
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
+                .padding(16)
+                .background(.ultraThinMaterial) // すりガラス効果
+                .cornerRadius(24)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
+                .padding(.horizontal, 24)
+                // ContentViewのボタン類と重ならないように底上げ
+                .padding(.bottom, 130)
             }
-            .padding(.vertical, 16)
-            .padding(.horizontal, 20)
-            .background(
-                RoundedRectangle(cornerRadius: 15)
-                    .fill(Color.black.opacity(0.6))
-                    .shadow(color: .black.opacity(0.3), radius: 8)
-            )
-            .padding(.bottom, 140)  // ボタンの上に余白
         }
     }
-}
 
 // MARK: - Preview
 #Preview {

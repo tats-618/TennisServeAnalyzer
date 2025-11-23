@@ -477,37 +477,3 @@ struct AnalysisResultsView: View {
     }
 }
 
-// MARK: - Preview
-#Preview {
-    let sample = ServeMetrics(
-        elbowAngleDeg: 168.5, // 伸びすぎ -> Feedback対象
-        armpitAngleDeg: 92.0, // 下がりすぎ -> Feedback対象
-        pelvisRisePx: 45.0,   // 不足 -> Feedback対象
-        leftArmTorsoAngleDeg: 65.0,
-        leftArmExtensionDeg: 170.0,
-        bodyAxisDeviationDeg: 6.2,
-        racketFaceYawDeg: 8.5,
-        racketFacePitchDeg: 6.0,
-        tossOffsetFromBaselinePx: -10.0, // 後ろすぎ -> Feedback対象
-        wristRotationDeg: 180.0,
-        tossPositionX: 760.0,
-        tossOffsetFromCenterPx: 120.0,
-        score1_elbowAngle: 40,
-        score2_armpitAngle: 40,
-        score3_lowerBodyContribution: 90, // 計算上は45pxだと90点
-        score4_leftHandPosition: 84,
-        score5_bodyAxisTilt: 78,
-        score6_racketFaceAngle: 86,
-        score7_tossPosition: 45,
-        score8_wristwork: 80,
-        totalScore: 65,
-        timestamp: Date(),
-        flags: []
-    )
-    
-    AnalysisResultsView(
-        metrics: sample,
-        onRetry: { print("Retry") },
-        onEndSession: { print("End Session") }
-    )
-}

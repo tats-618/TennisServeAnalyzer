@@ -703,31 +703,3 @@ struct RoundedCorner: Shape {
         return Path(path.cgPath)
     }
 }
-
-// MARK: - Preview
-#Preview {
-    let sampleServes = [
-        ServeMetrics(
-            elbowAngleDeg: 165, armpitAngleDeg: 90, pelvisRisePx: 55,
-            leftArmTorsoAngleDeg: 65, leftArmExtensionDeg: 170, bodyAxisDeviationDeg: 8,
-            racketFaceYawDeg: 12, racketFacePitchDeg: 8, tossOffsetFromBaselinePx: 5.0,
-            wristRotationDeg: 150, tossPositionX: 760.0, tossOffsetFromCenterPx: 120.0,
-            score1_elbowAngle: 85, score2_armpitAngle: 80,
-            score3_lowerBodyContribution: 75, score4_leftHandPosition: 82,
-            score5_bodyAxisTilt: 70, score6_racketFaceAngle: 78, score7_tossPosition: 88,
-            score8_wristwork: 72, totalScore: 79, timestamp: Date(), flags: []
-        ),
-        ServeMetrics(
-            elbowAngleDeg: 168, armpitAngleDeg: 92, pelvisRisePx: 65,
-            leftArmTorsoAngleDeg: 65, leftArmExtensionDeg: 170, bodyAxisDeviationDeg: 6,
-            racketFaceYawDeg: 8, racketFacePitchDeg: 6, tossOffsetFromBaselinePx: 15.0,
-            wristRotationDeg: 180, tossPositionX: 640.0, tossOffsetFromCenterPx: 0.0,
-            score1_elbowAngle: 92, score2_armpitAngle: 88,
-            score3_lowerBodyContribution: 90, score4_leftHandPosition: 84,
-            score5_bodyAxisTilt: 78, score6_racketFaceAngle: 86, score7_tossPosition: 92,
-            score8_wristwork: 85, totalScore: 87, timestamp: Date().addingTimeInterval(120), flags: []
-        )
-    ]
-    
-    SessionSummaryView(serves: sampleServes, onNewSession: { print("New Session") })
-}

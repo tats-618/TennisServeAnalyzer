@@ -9,7 +9,7 @@ import CoreMedia
 import Combine
 
 // MARK: - Analysis State
-enum AnalysisState {
+enum AnalysisState: Equatable {
     case idle
     case setupCamera
     case recording
@@ -17,6 +17,22 @@ enum AnalysisState {
     case completed(ServeMetrics)
     case sessionSummary([ServeMetrics])
     case error(String)
+    
+    // ⚠️ Associated Value ありなので自前で Equatable を実装
+    static func == (lhs: AnalysisState, rhs: AnalysisState) -> Bool {
+        switch (lhs, rhs) {
+        case (.idle, .idle),
+             (.setupCamera, .setupCamera),
+             (.recording, .recording),
+             (.analyzing, .analyzing),
+             (.completed, .completed),
+             (.sessionSummary, .sessionSummary),
+             (.error, .error):
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 // MARK: - Video Analyzer (ObservableObject for SwiftUI)
